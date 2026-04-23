@@ -1,44 +1,43 @@
-//! WebView management: create, navigate, and resize the content webview.
+//! WebView management: multi-tab content webviews.
 //!
-//! Null uses Tauri's multi-webview feature. The main window has two
-//! webviews stacked: `main` (the React UI — address bar and future
-//! tab strip at the top) and `content` (the browser tab itself,
-//! positioned below the top bar). All browsing happens in `content`;
-//! the React side never sees user page content.
+//! Every browser tab is its own child webview under the main window,
+//! labelled `tab-<uuid>`. Switching tabs toggles visibility via the
+//! native `show`/`hide` APIs — no off-screen hacks. All tabs share
+//! the same position and size (directly below the top bar); only
+//! one is visible at a time.
 //!
-//! The content webview is created **lazily** — on the first call to
-//! [`navigate`]. This sidesteps two problems at once: we never have
-//! an empty blank webview floating in the UI, and we never have to
-//! guess the window's final size during startup (where `inner_size`
-//! isn't reliable yet).
+//! The React shell in the `main` webview never sees user page
+//! content. It just manages the tab list and the address bar.
 
 use tauri::{
     webview::PageLoadEvent, AppHandle, Emitter, EventTarget, Manager, PhysicalPosition,
     PhysicalSize, Url, WebviewBuilder, WebviewUrl,
 };
 
-/// Label used to identify the content webview in state lookups.
-pub const CONTENT_LABEL: &str = "content";
+/// Prefix used for all tab webview labels. Keeps them separable from
+/// the `main` webview in the `app.webviews()` map.
+const TAB_PREFIX: &str = "tab-";
 
-/// Height of the top bar (address bar + future tab strip), in logical pixels.
+/// Height of the top bar (tab strip + toolbar), in logical pixels.
 /// Duplicated in `src/App.tsx` as `TOP_BAR_HEIGHT`. Keep them in sync.
-pub const TOP_BAR_HEIGHT: f64 = 44.0;
+pub const TOP_BAR_HEIGHT: f64 = 80.0;
 
-/// Event name the content webview emits to the UI whenever its URL changes.
-pub const URL_CHANGED: &str = "content-url-changed";
+/// Event name the content webview emits to the UI when a tab's URL changes.
+pub const TAB_UPDATED: &str = "tab-updated";
 
 fn s<E: std::fmt::Display>(e: E) -> String {
     e.to_string()
 }
 
-/// Navigate the content webview to `url`, creating it if it doesn't exist yet.
-pub fn navigate(app: &AppHandle, url: &str) -> Result<(), String> {
-    let url: Url = url.parse().map_err(s)?;
+fn tab_label(tab_id: &str) -> String {
+    format!("{TAB_PREFIX}{tab_id}")
+}
 
-    if let Some(webview) = app.get_webview(CONTENT_LABEL) {
-        webview.navigate(url).map_err(s)?;
-        return Ok(());
-    }
+/// Create a new tab webview, positioned under the top bar at full content size.
+/// Newly created tabs start hidden; call [`activate`] to show one.
+pub fn create_tab(app: &AppHandle, tab_id: &str, url: &str) -> Result<(), String> {
+    let label = tab_label(tab_id);
+    let url: Url = url.parse().map_err(s)?;
 
     let window = app
         .get_window("main")
@@ -47,16 +46,19 @@ pub fn navigate(app: &AppHandle, url: &str) -> Result<(), String> {
     let inner = window.inner_size().map_err(s)?;
     let top_px = (TOP_BAR_HEIGHT * scale).round() as u32;
 
-    let builder = WebviewBuilder::new(CONTENT_LABEL, WebviewUrl::External(url))
-        .on_page_load(|webview, payload| {
+    let emit_id = tab_id.to_string();
+    let builder = WebviewBuilder::new(&label, WebviewUrl::External(url)).on_page_load(
+        move |webview, payload| {
             if matches!(payload.event(), PageLoadEvent::Finished) {
+                let url_string = payload.url().to_string();
                 let _ = webview.app_handle().emit_to(
                     EventTarget::webview("main"),
-                    URL_CHANGED,
-                    payload.url().to_string(),
+                    TAB_UPDATED,
+                    serde_json::json!({ "id": emit_id, "url": url_string }),
                 );
             }
-        });
+        },
+    );
 
     window
         .add_child(
@@ -69,42 +71,76 @@ pub fn navigate(app: &AppHandle, url: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Resize the content webview. Called from the frontend on window resize
-/// with the new content-area dimensions in CSS (= logical) pixels.
-/// No-op if the webview hasn't been created yet.
-pub fn resize(app: &AppHandle, width: f64, height: f64) -> Result<(), String> {
-    let Some(webview) = app.get_webview(CONTENT_LABEL) else {
-        return Ok(());
-    };
-    let scale = webview.window().scale_factor().map_err(s)?;
-    let w = (width.max(0.0) * scale).round() as u32;
-    let h = (height.max(0.0) * scale).round() as u32;
-    webview.set_size(PhysicalSize::new(w, h)).map_err(s)?;
+/// Close (destroy) a tab webview.
+pub fn close_tab(app: &AppHandle, tab_id: &str) -> Result<(), String> {
+    let label = tab_label(tab_id);
+    if let Some(webview) = app.get_webview(&label) {
+        webview.close().map_err(s)?;
+    }
     Ok(())
 }
 
-/// Go back one entry in the content webview's history. No-op if the webview
-/// doesn't exist or there's nothing to go back to.
-pub fn go_back(app: &AppHandle) -> Result<(), String> {
-    let Some(webview) = app.get_webview(CONTENT_LABEL) else {
-        return Ok(());
-    };
-    webview.eval("history.back()").map_err(s)
+/// Show the given tab; hide every other tab.
+pub fn activate(app: &AppHandle, tab_id: &str) -> Result<(), String> {
+    let target = tab_label(tab_id);
+    for (label, webview) in app.webviews() {
+        if !label.starts_with(TAB_PREFIX) {
+            continue;
+        }
+        if label == target {
+            webview.show().map_err(s)?;
+        } else {
+            webview.hide().map_err(s)?;
+        }
+    }
+    Ok(())
 }
 
-/// Go forward one entry in the content webview's history. No-op if the webview
-/// doesn't exist or there's nothing to go forward to.
-pub fn go_forward(app: &AppHandle) -> Result<(), String> {
-    let Some(webview) = app.get_webview(CONTENT_LABEL) else {
-        return Ok(());
-    };
-    webview.eval("history.forward()").map_err(s)
+/// Navigate a specific tab to a new URL.
+pub fn navigate_tab(app: &AppHandle, tab_id: &str, url: &str) -> Result<(), String> {
+    let label = tab_label(tab_id);
+    let webview = app
+        .get_webview(&label)
+        .ok_or_else(|| format!("tab {tab_id} not found"))?;
+    let url: Url = url.parse().map_err(s)?;
+    webview.navigate(url).map_err(s)?;
+    Ok(())
 }
 
-/// Reload the current page. No-op if the webview doesn't exist.
-pub fn reload(app: &AppHandle) -> Result<(), String> {
-    let Some(webview) = app.get_webview(CONTENT_LABEL) else {
+/// Resize all tab webviews. Called from the frontend on window resize.
+/// Width/height come in as CSS (= logical) pixels.
+pub fn resize_all(app: &AppHandle, width: f64, height: f64) -> Result<(), String> {
+    let Some(window) = app.get_window("main") else {
         return Ok(());
     };
-    webview.eval("location.reload()").map_err(s)
+    let scale = window.scale_factor().map_err(s)?;
+    let w = (width.max(0.0) * scale).round() as u32;
+    let h = (height.max(0.0) * scale).round() as u32;
+    for (label, webview) in app.webviews() {
+        if !label.starts_with(TAB_PREFIX) {
+            continue;
+        }
+        webview.set_size(PhysicalSize::new(w, h)).map_err(s)?;
+    }
+    Ok(())
+}
+
+fn eval_on(app: &AppHandle, tab_id: &str, script: &str) -> Result<(), String> {
+    let label = tab_label(tab_id);
+    let Some(webview) = app.get_webview(&label) else {
+        return Ok(());
+    };
+    webview.eval(script).map_err(s)
+}
+
+pub fn go_back(app: &AppHandle, tab_id: &str) -> Result<(), String> {
+    eval_on(app, tab_id, "history.back()")
+}
+
+pub fn go_forward(app: &AppHandle, tab_id: &str) -> Result<(), String> {
+    eval_on(app, tab_id, "history.forward()")
+}
+
+pub fn reload(app: &AppHandle, tab_id: &str) -> Result<(), String> {
+    eval_on(app, tab_id, "location.reload()")
 }

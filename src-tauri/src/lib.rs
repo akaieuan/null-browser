@@ -18,7 +18,10 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::meta::get_app_version,
-            commands::tabs::navigate,
+            commands::tabs::open_tab,
+            commands::tabs::close_tab,
+            commands::tabs::activate_tab,
+            commands::tabs::navigate_tab,
             commands::tabs::resize_content,
             commands::tabs::go_back,
             commands::tabs::go_forward,

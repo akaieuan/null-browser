@@ -1,8 +1,86 @@
 @import "tailwindcss";
 
-@theme {
+@theme inline {
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica,
     Arial, sans-serif;
+
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+  --color-subtle: hsl(var(--subtle));
+
+  --radius-lg: 0.5rem;
+  --radius-md: calc(0.5rem - 2px);
+  --radius-sm: calc(0.5rem - 4px);
+}
+
+:root,
+:root[data-theme="charcoal"] {
+  --background: 0 0% 4%;
+  --foreground: 0 0% 96%;
+  --primary: 0 0% 96%;
+  --primary-foreground: 0 0% 4%;
+  --muted: 0 0% 9%;
+  --muted-foreground: 0 0% 64%;
+  --accent: 0 0% 15%;
+  --accent-foreground: 0 0% 96%;
+  --border: 0 0% 15%;
+  --input: 0 0% 9%;
+  --ring: 0 0% 32%;
+  --subtle: 0 0% 32%;
+}
+
+:root[data-theme="slate"] {
+  --background: 214 35% 7%;
+  --foreground: 213 42% 93%;
+  --primary: 213 42% 93%;
+  --primary-foreground: 214 35% 7%;
+  --muted: 213 30% 11%;
+  --muted-foreground: 212 18% 64%;
+  --accent: 213 30% 16%;
+  --accent-foreground: 213 42% 93%;
+  --border: 213 30% 16%;
+  --input: 213 30% 11%;
+  --ring: 214 22% 38%;
+  --subtle: 213 18% 36%;
+}
+
+:root[data-theme="sand"] {
+  --background: 30 20% 7%;
+  --foreground: 40 47% 91%;
+  --primary: 40 47% 91%;
+  --primary-foreground: 30 20% 7%;
+  --muted: 33 19% 10%;
+  --muted-foreground: 36 16% 59%;
+  --accent: 30 24% 13%;
+  --accent-foreground: 40 47% 91%;
+  --border: 30 24% 13%;
+  --input: 33 19% 10%;
+  --ring: 33 26% 38%;
+  --subtle: 30 15% 31%;
+}
+
+:root[data-theme="paper"] {
+  --background: 45 21% 96%;
+  --foreground: 0 0% 10%;
+  --primary: 0 0% 10%;
+  --primary-foreground: 45 21% 96%;
+  --muted: 45 13% 91%;
+  --muted-foreground: 0 0% 40%;
+  --accent: 43 11% 86%;
+  --accent-foreground: 0 0% 10%;
+  --border: 43 11% 78%;
+  --input: 45 13% 91%;
+  --ring: 48 4% 41%;
+  --subtle: 0 0% 60%;
 }
 
 html,
