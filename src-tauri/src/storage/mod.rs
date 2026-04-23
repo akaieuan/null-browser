@@ -56,8 +56,9 @@ impl Storage {
 
     pub fn list_bookmarks(&self) -> rusqlite::Result<Vec<Bookmark>> {
         let conn = self.conn();
-        let mut stmt = conn
-            .prepare("SELECT id, url, title, created_at FROM bookmarks ORDER BY created_at ASC")?;
+        let mut stmt = conn.prepare(
+            "SELECT id, url, title, created_at FROM bookmarks ORDER BY position ASC, id ASC",
+        )?;
         let rows = stmt.query_map([], |row| {
             Ok(Bookmark {
                 id: row.get(0)?,
@@ -76,7 +77,8 @@ impl Storage {
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);
         conn.execute(
-            "INSERT INTO bookmarks (url, title, created_at) VALUES (?1, ?2, ?3)",
+            "INSERT INTO bookmarks (url, title, created_at, position) \
+             VALUES (?1, ?2, ?3, (SELECT COALESCE(MAX(position) + 1, 0) FROM bookmarks))",
             params![url, title, now],
         )?;
         Ok(Bookmark {
@@ -97,6 +99,18 @@ impl Storage {
         let conn = self.conn();
         conn.execute("DELETE FROM bookmarks WHERE url = ?1", params![url])?;
         Ok(())
+    }
+
+    pub fn reorder_bookmarks(&self, ordered_ids: &[i64]) -> rusqlite::Result<()> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        {
+            let mut stmt = tx.prepare("UPDATE bookmarks SET position = ?1 WHERE id = ?2")?;
+            for (idx, id) in ordered_ids.iter().enumerate() {
+                stmt.execute(params![idx as i64, id])?;
+            }
+        }
+        tx.commit()
     }
 }
 

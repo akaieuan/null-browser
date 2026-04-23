@@ -31,4 +31,6 @@ export const ipc = {
   removeBookmark: (id: number) => invoke<void>("remove_bookmark", { id }),
   removeBookmarkByUrl: (url: string) =>
     invoke<void>("remove_bookmark_by_url", { url }),
+  reorderBookmarks: (orderedIds: number[]) =>
+    invoke<void>("reorder_bookmarks", { orderedIds }),
 };

@@ -12,6 +12,25 @@ import {
   User,
   X,
 } from "lucide-react";
+import {
+  closestCenter,
+  DndContext,
+  DragOverlay,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+  type DragStartEvent,
+} from "@dnd-kit/core";
+import {
+  arrayMove,
+  horizontalListSortingStrategy,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 
 import { Button } from "@/components/ui/button";
 import { AI_DRAWER_WIDTH, AIDrawer } from "@/components/panels/AIDrawer";
@@ -19,7 +38,7 @@ import { HistoryPanel } from "@/components/panels/HistoryPanel";
 import { ProfileMenu } from "@/components/panels/ProfileMenu";
 import { SettingsPanel } from "@/components/panels/SettingsPanel";
 import { ipc, type Bookmark } from "@/lib/ipc";
-import { type ThemeId, useTheme } from "@/lib/theme";
+import { type Mode, type PaletteId, useTheme } from "@/lib/theme";
 import { resolveQuery } from "@/lib/url";
 import { cn } from "@/lib/utils";
 
@@ -65,17 +84,20 @@ function App() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [input, setInput] = useState("");
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
+  const [draggingBookmarkId, setDraggingBookmarkId] = useState<number | null>(
+    null,
+  );
   const [showAiDrawer, setShowAiDrawer] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
-  const [, setTheme] = useTheme();
+  const { setPalette, setMode } = useTheme();
   const inputRef = useRef<HTMLInputElement>(null);
   const focusedRef = useRef(false);
 
   const activeTab = tabs.find((t) => t.id === activeId) ?? null;
   const hasActiveWebview = activeTab?.hasWebview ?? false;
-  const modalOpen = showSettings || showHistory;
+  const modalOpen = showSettings || showHistory || profileMenuOpen;
   const showLanding = !modalOpen && (!activeTab || !activeTab.hasWebview);
   const showBookmarkBar = bookmarks.length > 0;
 
@@ -87,6 +109,42 @@ function App() {
     return bookmarks.find((b) => b.url === activeTab.url) ?? null;
   }, [activeTab, bookmarks]);
 
+  const draggingBookmark = useMemo(
+    () => bookmarks.find((b) => b.id === draggingBookmarkId) ?? null,
+    [bookmarks, draggingBookmarkId],
+  );
+
+  const dndSensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+
+  const handleBookmarkDragStart = useCallback((e: DragStartEvent) => {
+    setDraggingBookmarkId(Number(e.active.id));
+  }, []);
+
+  const handleBookmarkDragEnd = useCallback((e: DragEndEvent) => {
+    setDraggingBookmarkId(null);
+    const { active, over } = e;
+    if (!over || active.id === over.id) return;
+    setBookmarks((prev) => {
+      const oldIdx = prev.findIndex((b) => b.id === active.id);
+      const newIdx = prev.findIndex((b) => b.id === over.id);
+      if (oldIdx < 0 || newIdx < 0) return prev;
+      const next = arrayMove(prev, oldIdx, newIdx);
+      ipc
+        .reorderBookmarks(next.map((b) => b.id))
+        .catch(() => {
+          ipc.listBookmarks().then(setBookmarks).catch(() => {});
+        });
+      return next;
+    });
+  }, []);
+
+  const handleBookmarkDragCancel = useCallback(() => {
+    setDraggingBookmarkId(null);
+  }, []);
+
   // Load bookmarks on mount.
   useEffect(() => {
     ipc.listBookmarks().then(setBookmarks).catch(() => {});
@@ -97,13 +155,17 @@ function App() {
   }, []);
 
   useEffect(() => {
-    const promise = listen<ThemeId>("theme-set", (e) => {
-      setTheme(e.payload);
+    const palettePromise = listen<PaletteId>("palette-set", (e) => {
+      setPalette(e.payload);
+    });
+    const modePromise = listen<Mode>("mode-set", (e) => {
+      setMode(e.payload);
     });
     return () => {
-      promise.then((off) => off());
+      palettePromise.then((off) => off());
+      modePromise.then((off) => off());
     };
-  }, [setTheme]);
+  }, [setPalette, setMode]);
 
   // Resize + reposition content webview any time the window resizes, the
   // top bar's height changes (bookmarks bar appearing), or the AI drawer
@@ -379,6 +441,7 @@ function App() {
           aria-label="New Tab"
           onClick={() => openNewTab()}
           className="mb-1 ml-1"
+          data-tauri-drag-region="false"
         >
           <Plus strokeWidth={1.5} />
         </Button>
@@ -396,6 +459,7 @@ function App() {
           aria-label="Back"
           disabled={!hasActiveWebview}
           onClick={() => activeId && ipc.goBack(activeId)}
+          data-tauri-drag-region="false"
         >
           <ChevronLeft strokeWidth={1.5} />
         </Button>
@@ -405,6 +469,7 @@ function App() {
           aria-label="Forward"
           disabled={!hasActiveWebview}
           onClick={() => activeId && ipc.goForward(activeId)}
+          data-tauri-drag-region="false"
         >
           <ChevronRight strokeWidth={1.5} />
         </Button>
@@ -414,12 +479,14 @@ function App() {
           aria-label="Reload"
           disabled={!hasActiveWebview}
           onClick={() => activeId && ipc.reload(activeId)}
+          data-tauri-drag-region="false"
         >
           <RotateCw strokeWidth={1.5} />
         </Button>
 
         <form
           onSubmit={handleSubmit}
+          data-tauri-drag-region="false"
           className={cn(
             "w-full",
             hasActiveWebview ? "flex-1" : "mx-auto max-w-[480px]",
@@ -431,6 +498,7 @@ function App() {
               aria-label={activeBookmark ? "Remove bookmark" : "Add bookmark"}
               disabled={!hasActiveWebview}
               onClick={toggleBookmark}
+              data-tauri-drag-region="false"
               className={cn(
                 "shrink-0 rounded-sm p-1 ml-1 transition-colors",
                 activeBookmark
@@ -479,6 +547,7 @@ function App() {
               setShowHistory((v) => !v);
             }}
             className={cn(showHistory && "bg-muted text-foreground")}
+            data-tauri-drag-region="false"
           >
             <HistoryIcon strokeWidth={1.5} />
           </Button>
@@ -488,6 +557,7 @@ function App() {
             aria-label="Chat"
             onClick={() => setShowAiDrawer((v) => !v)}
             className={cn(showAiDrawer && "bg-muted text-foreground")}
+            data-tauri-drag-region="false"
           >
             <Sparkles strokeWidth={1.5} />
           </Button>
@@ -500,43 +570,67 @@ function App() {
               setShowSettings((v) => !v);
             }}
             className={cn(showSettings && "bg-muted text-foreground")}
+            data-tauri-drag-region="false"
           >
             <SettingsIcon strokeWidth={1.5} />
           </Button>
-          <div className="relative">
-            <Button
-              variant="ghost"
-              size="icon"
-              aria-label="Profile"
-              onClick={() => setProfileMenuOpen((v) => !v)}
-              className={cn(profileMenuOpen && "bg-muted text-foreground")}
-            >
-              <User strokeWidth={1.5} />
-            </Button>
-            {profileMenuOpen && (
-              <ProfileMenu
-                profileName={PROFILE_NAME}
-                onClose={() => setProfileMenuOpen(false)}
-              />
-            )}
-          </div>
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="Profile"
+            onClick={() => {
+              setShowSettings(false);
+              setShowHistory(false);
+              setProfileMenuOpen((v) => !v);
+            }}
+            className={cn(profileMenuOpen && "bg-muted text-foreground")}
+            data-tauri-drag-region="false"
+          >
+            <User strokeWidth={1.5} />
+          </Button>
         </div>
       </div>
 
       {/* Row 3: bookmarks bar (only when there are bookmarks).
-          Shares the toolbar's bg so it reads as one continuous surface. */}
+          Shares the toolbar's bg so it reads as one continuous surface.
+          Gaps between items are window-drag surface; items opt out via
+          data-tauri-drag-region="false" on the sortable wrapper. */}
       {showBookmarkBar && (
         <div
+          data-tauri-drag-region
           className="flex shrink-0 items-center gap-0.5 overflow-x-auto bg-muted/40 px-2 pb-1"
           style={{ height: BOOKMARK_BAR_HEIGHT }}
         >
-          {bookmarks.map((b) => (
-            <BookmarkBarItem
-              key={b.id}
-              bookmark={b}
-              onClick={() => navigateTo(b.url)}
-            />
-          ))}
+          <DndContext
+            sensors={dndSensors}
+            collisionDetection={closestCenter}
+            onDragStart={handleBookmarkDragStart}
+            onDragEnd={handleBookmarkDragEnd}
+            onDragCancel={handleBookmarkDragCancel}
+          >
+            <SortableContext
+              items={bookmarks.map((b) => b.id)}
+              strategy={horizontalListSortingStrategy}
+            >
+              {bookmarks.map((b) => (
+                <SortableBookmarkBarItem
+                  key={b.id}
+                  bookmark={b}
+                  onClick={() => navigateTo(b.url)}
+                />
+              ))}
+            </SortableContext>
+            <DragOverlay>
+              {draggingBookmark ? (
+                <div className="rounded shadow-md opacity-90">
+                  <BookmarkBarItem
+                    bookmark={draggingBookmark}
+                    onClick={() => {}}
+                  />
+                </div>
+              ) : null}
+            </DragOverlay>
+          </DndContext>
         </div>
       )}
 
@@ -567,6 +661,12 @@ function App() {
           {showHistory && (
             <HistoryPanel onClose={() => setShowHistory(false)} />
           )}
+          {profileMenuOpen && (
+            <ProfileMenu
+              profileName={PROFILE_NAME}
+              onClose={() => setProfileMenuOpen(false)}
+            />
+          )}
         </div>
         {showAiDrawer && <AIDrawer onClose={() => setShowAiDrawer(false)} />}
       </div>
@@ -590,6 +690,7 @@ function TabPill({
   return (
     <div
       onClick={onActivate}
+      data-tauri-drag-region="false"
       className={cn(
         "group relative flex h-7 min-w-0 max-w-[200px] flex-1 cursor-default items-center gap-2 rounded-md px-3 text-xs transition-colors",
         active
@@ -631,6 +732,41 @@ function BookmarkBarItem({
     >
       <span className="truncate">{bookmark.title}</span>
     </button>
+  );
+}
+
+function SortableBookmarkBarItem({
+  bookmark,
+  onClick,
+}: {
+  bookmark: Bookmark;
+  onClick: () => void;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: bookmark.id });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.4 : 1,
+  };
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      data-tauri-drag-region="false"
+      {...attributes}
+      {...listeners}
+    >
+      <BookmarkBarItem bookmark={bookmark} onClick={onClick} />
+    </div>
   );
 }
 

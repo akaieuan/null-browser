@@ -1,66 +1,101 @@
 import { useEffect, useState } from "react";
 
-export type ThemeId =
-  | "charcoal"
+export type PaletteId =
+  | "neutral"
   | "slate"
   | "sand"
-  | "paper"
   | "0400am"
   | "mudd"
   | "cyberspace";
 
-export interface Theme {
-  id: ThemeId;
+export type Mode = "light" | "dark";
+
+export interface Palette {
+  id: PaletteId;
   label: string;
   swatch: string;
 }
 
-export const THEMES: Theme[] = [
-  { id: "charcoal", label: "Charcoal", swatch: "#2a2a2a" },
+export const PALETTES: Palette[] = [
+  { id: "neutral", label: "Neutral", swatch: "#2a2a2a" },
   { id: "slate", label: "Slate", swatch: "#334b6b" },
   { id: "sand", label: "Sand", swatch: "#8b6b45" },
-  { id: "paper", label: "Paper", swatch: "#f4f2ec" },
   { id: "0400am", label: "0400AM", swatch: "oklch(0.686 0.143 285.656)" },
   { id: "mudd", label: "Mudd", swatch: "oklch(0.707 0.108 152.216)" },
   { id: "cyberspace", label: "Cyberspace", swatch: "oklch(0.748 0.043 31.264)" },
 ];
 
-export const DEFAULT_THEME: ThemeId = "charcoal";
-const STORAGE_KEY = "null.theme";
+export const DEFAULT_PALETTE: PaletteId = "neutral";
+export const DEFAULT_MODE: Mode = "dark";
 
-function isThemeId(id: string | null): id is ThemeId {
-  return !!id && THEMES.some((t) => t.id === id);
+const PALETTE_KEY = "null.palette";
+const MODE_KEY = "null.mode";
+
+function isPaletteId(id: string | null): id is PaletteId {
+  return !!id && PALETTES.some((t) => t.id === id);
 }
 
-export function loadTheme(): ThemeId {
+function isMode(m: string | null): m is Mode {
+  return m === "light" || m === "dark";
+}
+
+export function loadPalette(): PaletteId {
   try {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    if (isThemeId(stored)) return stored;
+    const stored = localStorage.getItem(PALETTE_KEY);
+    if (isPaletteId(stored)) return stored;
   } catch {
-    // localStorage may be unavailable in some WebViews; fall through.
+    /* localStorage may be unavailable; fall through. */
   }
-  return DEFAULT_THEME;
+  return DEFAULT_PALETTE;
 }
 
-export function applyTheme(id: ThemeId): void {
-  document.documentElement.dataset.theme = id;
-}
-
-export function persistTheme(id: ThemeId): void {
+export function loadMode(): Mode {
   try {
-    localStorage.setItem(STORAGE_KEY, id);
+    const stored = localStorage.getItem(MODE_KEY);
+    if (isMode(stored)) return stored;
   } catch {
-    // Persistence is best-effort.
+    /* fall through */
+  }
+  return DEFAULT_MODE;
+}
+
+export function applyTheme(palette: PaletteId, mode: Mode): void {
+  const root = document.documentElement;
+  root.dataset.palette = palette;
+  root.dataset.mode = mode;
+}
+
+function persist(palette: PaletteId, mode: Mode): void {
+  try {
+    localStorage.setItem(PALETTE_KEY, palette);
+    localStorage.setItem(MODE_KEY, mode);
+  } catch {
+    /* best-effort */
   }
 }
 
-export function useTheme(): [ThemeId, (id: ThemeId) => void] {
-  const [theme, setTheme] = useState<ThemeId>(loadTheme);
+export interface UseThemeReturn {
+  palette: PaletteId;
+  mode: Mode;
+  setPalette: (id: PaletteId) => void;
+  setMode: (m: Mode) => void;
+  toggleMode: () => void;
+}
+
+export function useTheme(): UseThemeReturn {
+  const [palette, setPaletteState] = useState<PaletteId>(loadPalette);
+  const [mode, setModeState] = useState<Mode>(loadMode);
 
   useEffect(() => {
-    applyTheme(theme);
-    persistTheme(theme);
-  }, [theme]);
+    applyTheme(palette, mode);
+    persist(palette, mode);
+  }, [palette, mode]);
 
-  return [theme, setTheme];
+  return {
+    palette,
+    mode,
+    setPalette: setPaletteState,
+    setMode: setModeState,
+    toggleMode: () => setModeState((m) => (m === "dark" ? "light" : "dark")),
+  };
 }

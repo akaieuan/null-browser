@@ -31,3 +31,10 @@ pub fn remove_bookmark_by_url(storage: State<Storage>, url: String) -> Result<()
         .remove_bookmark_by_url(&url)
         .map_err(|e| e.to_string())
 }
+
+#[tauri::command]
+pub fn reorder_bookmarks(storage: State<Storage>, ordered_ids: Vec<i64>) -> Result<(), String> {
+    storage
+        .reorder_bookmarks(&ordered_ids)
+        .map_err(|e| e.to_string())
+}

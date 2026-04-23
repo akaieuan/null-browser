@@ -1,27 +1,15 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { X } from "lucide-react";
+import { Moon, Sun } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
+import { PanelHeader } from "@/components/panels/PanelHeader";
 import { ipc } from "@/lib/ipc";
-import { THEMES, useTheme } from "@/lib/theme";
+import { PALETTES, useTheme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 
 export function SettingsPanel({ onClose }: { onClose: () => void }) {
   return (
     <div className="absolute inset-0 z-40 flex flex-col overflow-hidden bg-background text-foreground">
-      <header className="flex h-12 shrink-0 items-center justify-between px-4">
-        <div className="text-sm font-medium">Settings</div>
-        <Button
-          variant="ghost"
-          size="icon"
-          aria-label="Close Settings"
-          onClick={onClose}
-          className="h-7 w-7"
-        >
-          <X size={14} strokeWidth={1.5} />
-        </Button>
-      </header>
-
+      <PanelHeader title="Settings" onClose={onClose} />
       <main className="flex-1 overflow-y-auto">
         <div className="mx-auto max-w-xl space-y-14 px-8 py-10">
           <AppearanceSection />
@@ -65,38 +53,86 @@ function Row({
 }
 
 function AppearanceSection() {
-  const [theme, setTheme] = useTheme();
-  const active = THEMES.find((t) => t.id === theme) ?? THEMES[0];
+  const { palette, mode, setPalette, setMode } = useTheme();
+  const active = PALETTES.find((p) => p.id === palette) ?? PALETTES[0];
   return (
     <Section title="Appearance">
       <Row label="Theme">
         <div className="flex items-center gap-3">
           <span className="text-muted-foreground">{active.label}</span>
           <div className="flex items-center gap-1.5">
-            {THEMES.map((t) => {
-              const selected = theme === t.id;
+            {PALETTES.map((p) => {
+              const selected = palette === p.id;
               return (
                 <button
-                  key={t.id}
+                  key={p.id}
                   type="button"
-                  aria-label={t.label}
+                  aria-label={p.label}
                   aria-pressed={selected}
-                  title={t.label}
-                  onClick={() => setTheme(t.id)}
+                  title={p.label}
+                  onClick={() => setPalette(p.id)}
                   className={cn(
                     "h-4 w-4 rounded-full border transition",
                     selected
                       ? "border-foreground"
                       : "border-border opacity-60 hover:opacity-100",
                   )}
-                  style={{ background: t.swatch }}
+                  style={{ background: p.swatch }}
                 />
               );
             })}
           </div>
         </div>
       </Row>
+      <Row label="Mode">
+        <div className="flex items-center gap-1 rounded-md border border-border p-0.5">
+          <ModeButton
+            label="Light"
+            active={mode === "light"}
+            onClick={() => setMode("light")}
+          >
+            <Sun size={14} strokeWidth={1.5} />
+          </ModeButton>
+          <ModeButton
+            label="Dark"
+            active={mode === "dark"}
+            onClick={() => setMode("dark")}
+          >
+            <Moon size={14} strokeWidth={1.5} />
+          </ModeButton>
+        </div>
+      </Row>
     </Section>
+  );
+}
+
+function ModeButton({
+  label,
+  active,
+  onClick,
+  children,
+}: {
+  label: string;
+  active: boolean;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      aria-pressed={active}
+      onClick={onClick}
+      className={cn(
+        "flex h-6 items-center gap-1.5 rounded px-2 text-xs transition-colors",
+        active
+          ? "bg-accent text-accent-foreground"
+          : "text-muted-foreground hover:text-foreground",
+      )}
+    >
+      {children}
+      <span>{label}</span>
+    </button>
   );
 }
 
