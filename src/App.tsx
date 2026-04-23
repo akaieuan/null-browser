@@ -1,22 +1,24 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import {
   ChevronLeft,
   ChevronRight,
   Plus,
   RotateCw,
+  Star,
   X,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { ipc } from "@/lib/ipc";
+import { ipc, type Bookmark } from "@/lib/ipc";
 import { THEMES, type ThemeId, useTheme } from "@/lib/theme";
 import { resolveQuery } from "@/lib/url";
 import { cn } from "@/lib/utils";
 
-// Matches `TOP_BAR_HEIGHT` in src-tauri/src/webview/mod.rs.
-const TOP_BAR_HEIGHT = 80;
+// Tab strip + toolbar.
+const NAV_BARS_HEIGHT = 80;
 const TAB_STRIP_HEIGHT = 36;
+const BOOKMARK_BAR_HEIGHT = 32;
 
 // With `titleBarStyle: Overlay` on macOS, the traffic lights are drawn on top
 // of our custom top bar in the top-left. Pad so nothing lands under them.
@@ -28,9 +30,6 @@ type Tab = {
   id: string;
   url: string;
   title: string;
-  /** True once a content webview has been created for this tab. A tab starts
-   * life with `hasWebview = false`; we only spawn the webview on first
-   * navigation so blank tabs stay as the React landing page. */
   hasWebview: boolean;
 };
 
@@ -52,10 +51,24 @@ function hostnameFor(url: string): string {
   }
 }
 
+// Deterministic colored avatar from a URL's hostname. No favicon fetching —
+// zero outbound connections, consistent offline behavior, and each theme
+// still gets recognizable colors via HSL.
+function avatarFor(url: string): { letter: string; hue: number } {
+  const host = hostnameFor(url);
+  const letter = host.replace(/^www\./, "")[0]?.toUpperCase() ?? "?";
+  let hue = 0;
+  for (let i = 0; i < host.length; i++) {
+    hue = (hue * 31 + host.charCodeAt(i)) % 360;
+  }
+  return { letter, hue };
+}
+
 function App() {
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [input, setInput] = useState("");
+  const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
   const [, setTheme] = useTheme();
   const inputRef = useRef<HTMLInputElement>(null);
   const focusedRef = useRef(false);
@@ -63,6 +76,20 @@ function App() {
   const activeTab = tabs.find((t) => t.id === activeId) ?? null;
   const hasActiveWebview = activeTab?.hasWebview ?? false;
   const showLanding = !activeTab || !activeTab.hasWebview;
+  const showBookmarkBar = bookmarks.length > 0;
+
+  const topBarHeight =
+    NAV_BARS_HEIGHT + (showBookmarkBar ? BOOKMARK_BAR_HEIGHT : 0);
+
+  const activeBookmark = useMemo(() => {
+    if (!activeTab || !activeTab.hasWebview) return null;
+    return bookmarks.find((b) => b.url === activeTab.url) ?? null;
+  }, [activeTab, bookmarks]);
+
+  // Load bookmarks on mount.
+  useEffect(() => {
+    ipc.listBookmarks().then(setBookmarks).catch(() => {});
+  }, []);
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -77,18 +104,22 @@ function App() {
     };
   }, [setTheme]);
 
+  // Resize + reposition content webview any time the window resizes or the
+  // top bar's height changes (e.g. the bookmarks bar appearing).
   useEffect(() => {
     const sync = () =>
       ipc
-        .resizeContent(window.innerWidth, window.innerHeight - TOP_BAR_HEIGHT)
+        .resizeContent(
+          topBarHeight,
+          window.innerWidth,
+          window.innerHeight - topBarHeight,
+        )
         .catch(() => {});
     window.addEventListener("resize", sync);
     sync();
     return () => window.removeEventListener("resize", sync);
-  }, []);
+  }, [topBarHeight]);
 
-  // Tab URL syncing — when a page finishes loading inside a tab, update the
-  // tab's URL and (if that tab is active and the user isn't typing) the bar.
   useEffect(() => {
     const promise = listen<{ id: string; url: string }>("tab-updated", (e) => {
       const { id, url } = e.payload;
@@ -103,6 +134,123 @@ function App() {
       promise.then((off) => off());
     };
   }, [activeId]);
+
+  const navigateTo = useCallback(
+    async (url: string) => {
+      if (!activeId) {
+        const id = uuid();
+        await ipc.openTab(id, url, topBarHeight);
+        await ipc.activateTab(id);
+        setTabs((prev) => [
+          ...prev,
+          { id, url, title: hostnameFor(url), hasWebview: true },
+        ]);
+        setActiveId(id);
+        setInput(url);
+        return;
+      }
+      const tab = tabs.find((t) => t.id === activeId);
+      if (!tab) return;
+      if (tab.hasWebview) {
+        await ipc.navigateTab(activeId, url);
+      } else {
+        await ipc.openTab(activeId, url, topBarHeight);
+        await ipc.activateTab(activeId);
+      }
+      setTabs((prev) =>
+        prev.map((t) =>
+          t.id === activeId
+            ? { ...t, url, title: hostnameFor(url), hasWebview: true }
+            : t,
+        ),
+      );
+      setInput(url);
+    },
+    [activeId, tabs, topBarHeight],
+  );
+
+  const openNewTab = useCallback(
+    async (url: string = BLANK_URL) => {
+      const id = uuid();
+      if (url !== BLANK_URL) {
+        await ipc.openTab(id, url, topBarHeight);
+        await ipc.activateTab(id);
+      } else {
+        await ipc.hideAllTabs();
+      }
+      setTabs((prev) => [
+        ...prev,
+        {
+          id,
+          url,
+          title: hostnameFor(url),
+          hasWebview: url !== BLANK_URL,
+        },
+      ]);
+      setActiveId(id);
+      setInput(url === BLANK_URL ? "" : url);
+      inputRef.current?.focus();
+    },
+    [topBarHeight],
+  );
+
+  const activateTabById = useCallback(
+    async (id: string) => {
+      const tab = tabs.find((t) => t.id === id);
+      if (!tab) return;
+      if (tab.hasWebview) {
+        await ipc.activateTab(id);
+      } else {
+        await ipc.hideAllTabs();
+      }
+      setActiveId(id);
+      setInput(tab.url !== BLANK_URL ? tab.url : "");
+    },
+    [tabs],
+  );
+
+  const closeTabById = useCallback(
+    async (id: string) => {
+      const tab = tabs.find((t) => t.id === id);
+      if (tab?.hasWebview) {
+        await ipc.closeTab(id);
+      }
+      const remaining = tabs.filter((t) => t.id !== id);
+      setTabs(remaining);
+      if (activeId === id) {
+        if (remaining.length > 0) {
+          const next = remaining[remaining.length - 1];
+          if (next.hasWebview) {
+            await ipc.activateTab(next.id);
+          } else {
+            await ipc.hideAllTabs();
+          }
+          setActiveId(next.id);
+          setInput(next.url !== BLANK_URL ? next.url : "");
+        } else {
+          setActiveId(null);
+          setInput("");
+        }
+      }
+    },
+    [tabs, activeId],
+  );
+
+  const toggleBookmark = useCallback(async () => {
+    if (!activeTab || !activeTab.hasWebview) return;
+    if (activeBookmark) {
+      await ipc.removeBookmark(activeBookmark.id);
+      setBookmarks((prev) => prev.filter((b) => b.id !== activeBookmark.id));
+    } else {
+      const created = await ipc.addBookmark(activeTab.url, activeTab.title);
+      setBookmarks((prev) => [...prev, created]);
+    }
+  }, [activeTab, activeBookmark]);
+
+  const removeBookmark = useCallback(async (id: number) => {
+    await ipc.removeBookmark(id);
+    setBookmarks((prev) => prev.filter((b) => b.id !== id));
+  }, []);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -126,6 +274,10 @@ function App() {
           e.preventDefault();
           if (activeId) ipc.reload(activeId);
           break;
+        case "d":
+          e.preventDefault();
+          toggleBookmark();
+          break;
         case "[":
           e.preventDefault();
           if (activeId) ipc.goBack(activeId);
@@ -138,95 +290,13 @@ function App() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeId, tabs]);
-
-  async function openNewTab(url: string = BLANK_URL) {
-    const id = uuid();
-    if (url !== BLANK_URL) {
-      await ipc.openTab(id, url);
-      await ipc.activateTab(id);
-    } else {
-      await ipc.hideAllTabs();
-    }
-    setTabs((prev) => [
-      ...prev,
-      {
-        id,
-        url,
-        title: hostnameFor(url),
-        hasWebview: url !== BLANK_URL,
-      },
-    ]);
-    setActiveId(id);
-    setInput(url === BLANK_URL ? "" : url);
-    inputRef.current?.focus();
-  }
-
-  async function activateTabById(id: string) {
-    const tab = tabs.find((t) => t.id === id);
-    if (!tab) return;
-    if (tab.hasWebview) {
-      await ipc.activateTab(id);
-    } else {
-      await ipc.hideAllTabs();
-    }
-    setActiveId(id);
-    setInput(tab.url !== BLANK_URL ? tab.url : "");
-  }
-
-  async function closeTabById(id: string) {
-    const tab = tabs.find((t) => t.id === id);
-    if (tab?.hasWebview) {
-      await ipc.closeTab(id);
-    }
-    const remaining = tabs.filter((t) => t.id !== id);
-    setTabs(remaining);
-    if (activeId === id) {
-      if (remaining.length > 0) {
-        const next = remaining[remaining.length - 1];
-        if (next.hasWebview) {
-          await ipc.activateTab(next.id);
-        } else {
-          await ipc.hideAllTabs();
-        }
-        setActiveId(next.id);
-        setInput(next.url !== BLANK_URL ? next.url : "");
-      } else {
-        setActiveId(null);
-        setInput("");
-      }
-    }
-  }
+  }, [activeId, openNewTab, closeTabById, toggleBookmark]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     const url = resolveQuery(input);
     if (!url) return;
-
-    if (!activeId) {
-      await openNewTab(url);
-      return;
-    }
-
-    const tab = tabs.find((t) => t.id === activeId);
-    if (!tab) return;
-
-    if (tab.hasWebview) {
-      await ipc.navigateTab(activeId, url);
-    } else {
-      // First navigation on this tab — create its webview now.
-      await ipc.openTab(activeId, url);
-      await ipc.activateTab(activeId);
-    }
-    setTabs((prev) =>
-      prev.map((t) =>
-        t.id === activeId
-          ? { ...t, url, title: hostnameFor(url), hasWebview: true }
-          : t,
-      ),
-    );
-    setInput(url);
+    await navigateTo(url);
     inputRef.current?.blur();
   }
 
@@ -269,7 +339,7 @@ function App() {
       <div
         data-tauri-drag-region
         className="flex shrink-0 items-center gap-1 bg-muted/40 px-2"
-        style={{ height: TOP_BAR_HEIGHT - TAB_STRIP_HEIGHT }}
+        style={{ height: NAV_BARS_HEIGHT - TAB_STRIP_HEIGHT }}
       >
         <Button
           variant="ghost"
@@ -306,46 +376,107 @@ function App() {
             hasActiveWebview ? "flex-1" : "mx-auto max-w-[480px]",
           )}
         >
-          <input
-            ref={inputRef}
-            type="text"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onFocus={() => {
-              focusedRef.current = true;
-            }}
-            onBlur={() => {
-              focusedRef.current = false;
-            }}
-            placeholder="Search or enter URL"
-            spellCheck={false}
-            autoCapitalize="off"
-            autoCorrect="off"
-            className={cn(
-              "h-7 w-full rounded-md border border-border bg-input px-3 text-sm text-foreground placeholder:text-muted-foreground focus:border-ring focus:bg-accent focus:outline-none",
-              hasActiveWebview ? "text-left" : "text-center focus:text-left",
-            )}
-          />
+          <div className="group flex h-7 w-full items-center rounded-md border border-border bg-input focus-within:border-ring focus-within:bg-accent">
+            <button
+              type="button"
+              aria-label={activeBookmark ? "Remove bookmark" : "Add bookmark"}
+              disabled={!hasActiveWebview}
+              onClick={toggleBookmark}
+              className={cn(
+                "shrink-0 rounded-sm p-1 ml-1 transition-colors",
+                activeBookmark
+                  ? "text-foreground"
+                  : "text-muted-foreground hover:text-foreground",
+                !hasActiveWebview && "opacity-30",
+              )}
+              title={activeBookmark ? "Remove bookmark" : "Add bookmark"}
+            >
+              <Star
+                size={14}
+                strokeWidth={1.5}
+                fill={activeBookmark ? "currentColor" : "none"}
+              />
+            </button>
+            <input
+              ref={inputRef}
+              type="text"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onFocus={() => {
+                focusedRef.current = true;
+              }}
+              onBlur={() => {
+                focusedRef.current = false;
+              }}
+              placeholder="Search or enter URL"
+              spellCheck={false}
+              autoCapitalize="off"
+              autoCorrect="off"
+              className={cn(
+                "h-full w-full bg-transparent pl-1 pr-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none",
+                hasActiveWebview ? "text-left" : "text-center focus:text-left",
+              )}
+            />
+          </div>
         </form>
 
         <div className="w-16 shrink-0" />
       </div>
 
+      {/* Row 3: bookmarks bar (only when there are bookmarks) */}
+      {showBookmarkBar && (
+        <div
+          className="flex shrink-0 items-center gap-0.5 overflow-x-auto border-t border-border bg-background px-2"
+          style={{ height: BOOKMARK_BAR_HEIGHT }}
+        >
+          {bookmarks.map((b) => (
+            <BookmarkBarItem
+              key={b.id}
+              bookmark={b}
+              onClick={() => navigateTo(b.url)}
+            />
+          ))}
+        </div>
+      )}
+
       {showLanding && (
-        <div className="flex flex-1 flex-col items-center justify-center gap-8">
-          <div className="flex items-center gap-1.5 text-foreground">
-            <span className="text-3xl font-extralight tracking-tight">
-              Null
-            </span>
-            <NullMark />
-          </div>
-          <div className="flex flex-col items-center gap-1 text-sm text-muted-foreground">
-            <div>Type a URL and press enter.</div>
-            <div className="text-xs text-subtle">
-              ⌘T new tab · ⌘W close · ⌘L focus · ⌘R reload · ⌘[ back · ⌘] forward
+        <div className="flex flex-1 flex-col items-center overflow-y-auto px-8 py-12">
+          <div className="flex flex-col items-center gap-6">
+            <div className="flex items-center gap-1.5 text-foreground">
+              <span className="text-3xl font-extralight tracking-tight">
+                Null
+              </span>
+              <NullMark />
+            </div>
+            <div className="flex flex-col items-center gap-1 text-sm text-muted-foreground">
+              <div>Type a URL and press enter.</div>
+              <div className="text-xs text-subtle">
+                ⌘T new tab · ⌘W close · ⌘L focus · ⌘D bookmark · ⌘R reload
+              </div>
             </div>
           </div>
-          <ThemePicker />
+
+          {bookmarks.length > 0 && (
+            <div className="mt-12 w-full max-w-3xl">
+              <div className="mb-3 text-xs font-medium uppercase tracking-wider text-subtle">
+                Bookmarks
+              </div>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4">
+                {bookmarks.map((b) => (
+                  <BookmarkCard
+                    key={b.id}
+                    bookmark={b}
+                    onOpen={() => navigateTo(b.url)}
+                    onRemove={() => removeBookmark(b.id)}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="mt-auto pt-12">
+            <ThemePicker />
+          </div>
         </div>
       )}
     </div>
@@ -389,6 +520,74 @@ function TabPill({
           <X size={10} strokeWidth={1.5} />
         </button>
       )}
+    </div>
+  );
+}
+
+function BookmarkBarItem({
+  bookmark,
+  onClick,
+}: {
+  bookmark: Bookmark;
+  onClick: () => void;
+}) {
+  const { letter, hue } = avatarFor(bookmark.url);
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={bookmark.url}
+      className="group flex h-6 max-w-[180px] shrink-0 items-center gap-1.5 rounded px-2 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+    >
+      <span
+        className="flex h-4 w-4 shrink-0 items-center justify-center rounded text-[9px] font-medium text-white"
+        style={{ background: `hsl(${hue}, 30%, 45%)` }}
+      >
+        {letter}
+      </span>
+      <span className="truncate">{bookmark.title}</span>
+    </button>
+  );
+}
+
+function BookmarkCard({
+  bookmark,
+  onOpen,
+  onRemove,
+}: {
+  bookmark: Bookmark;
+  onOpen: () => void;
+  onRemove: () => void;
+}) {
+  const { letter, hue } = avatarFor(bookmark.url);
+  return (
+    <div
+      onClick={onOpen}
+      className="group relative flex cursor-default items-center gap-3 rounded-lg border border-border bg-muted/30 p-3 transition-colors hover:bg-muted"
+    >
+      <div
+        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-sm font-medium text-white"
+        style={{ background: `hsl(${hue}, 30%, 45%)` }}
+      >
+        {letter}
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-sm text-foreground">{bookmark.title}</div>
+        <div className="truncate text-xs text-muted-foreground">
+          {hostnameFor(bookmark.url)}
+        </div>
+      </div>
+      <button
+        type="button"
+        aria-label="Remove bookmark"
+        onClick={(e) => {
+          e.stopPropagation();
+          onRemove();
+        }}
+        className="absolute right-1.5 top-1.5 rounded p-0.5 text-muted-foreground opacity-0 hover:bg-accent hover:text-foreground group-hover:opacity-100"
+      >
+        <X size={12} strokeWidth={1.5} />
+      </button>
     </div>
   );
 }

@@ -6,11 +6,22 @@
 
 use std::path::PathBuf;
 use std::sync::Mutex;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use directories::ProjectDirs;
-use rusqlite::Connection;
+use rusqlite::{params, Connection};
+use serde::{Deserialize, Serialize};
 
 mod migrations;
+
+/// A bookmark as stored in SQLite and exposed to the frontend.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Bookmark {
+    pub id: i64,
+    pub url: String,
+    pub title: String,
+    pub created_at: i64,
+}
 
 /// Owned handle to the single SQLite connection used by the app.
 ///
@@ -41,6 +52,51 @@ impl Storage {
     /// the duration of the guard.
     pub fn conn(&self) -> std::sync::MutexGuard<'_, Connection> {
         self.conn.lock().expect("storage mutex poisoned")
+    }
+
+    pub fn list_bookmarks(&self) -> rusqlite::Result<Vec<Bookmark>> {
+        let conn = self.conn();
+        let mut stmt = conn
+            .prepare("SELECT id, url, title, created_at FROM bookmarks ORDER BY created_at ASC")?;
+        let rows = stmt.query_map([], |row| {
+            Ok(Bookmark {
+                id: row.get(0)?,
+                url: row.get(1)?,
+                title: row.get(2)?,
+                created_at: row.get(3)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    pub fn add_bookmark(&self, url: &str, title: &str) -> rusqlite::Result<Bookmark> {
+        let conn = self.conn();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        conn.execute(
+            "INSERT INTO bookmarks (url, title, created_at) VALUES (?1, ?2, ?3)",
+            params![url, title, now],
+        )?;
+        Ok(Bookmark {
+            id: conn.last_insert_rowid(),
+            url: url.to_string(),
+            title: title.to_string(),
+            created_at: now,
+        })
+    }
+
+    pub fn remove_bookmark(&self, id: i64) -> rusqlite::Result<()> {
+        let conn = self.conn();
+        conn.execute("DELETE FROM bookmarks WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    pub fn remove_bookmark_by_url(&self, url: &str) -> rusqlite::Result<()> {
+        let conn = self.conn();
+        conn.execute("DELETE FROM bookmarks WHERE url = ?1", params![url])?;
+        Ok(())
     }
 }
 

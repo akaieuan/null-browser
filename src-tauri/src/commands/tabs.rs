@@ -5,8 +5,8 @@ use tauri::AppHandle;
 use crate::webview;
 
 #[tauri::command]
-pub fn open_tab(app: AppHandle, id: String, url: String) -> Result<(), String> {
-    webview::create_tab(&app, &id, &url)
+pub fn open_tab(app: AppHandle, id: String, url: String, top: f64) -> Result<(), String> {
+    webview::create_tab(&app, &id, &url, top)
 }
 
 #[tauri::command]
@@ -30,8 +30,8 @@ pub fn navigate_tab(app: AppHandle, id: String, url: String) -> Result<(), Strin
 }
 
 #[tauri::command]
-pub fn resize_content(app: AppHandle, width: f64, height: f64) -> Result<(), String> {
-    webview::resize_all(&app, width, height)
+pub fn resize_content(app: AppHandle, top: f64, width: f64, height: f64) -> Result<(), String> {
+    webview::set_content_frame(&app, top, width, height)
 }
 
 #[tauri::command]

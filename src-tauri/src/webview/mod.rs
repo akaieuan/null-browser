@@ -18,10 +18,6 @@ use tauri::{
 /// the `main` webview in the `app.webviews()` map.
 const TAB_PREFIX: &str = "tab-";
 
-/// Height of the top bar (tab strip + toolbar), in logical pixels.
-/// Duplicated in `src/App.tsx` as `TOP_BAR_HEIGHT`. Keep them in sync.
-pub const TOP_BAR_HEIGHT: f64 = 80.0;
-
 /// Event name the content webview emits to the UI when a tab's URL changes.
 pub const TAB_UPDATED: &str = "tab-updated";
 
@@ -33,9 +29,10 @@ fn tab_label(tab_id: &str) -> String {
     format!("{TAB_PREFIX}{tab_id}")
 }
 
-/// Create a new tab webview, positioned under the top bar at full content size.
-/// Newly created tabs start hidden; call [`activate`] to show one.
-pub fn create_tab(app: &AppHandle, tab_id: &str, url: &str) -> Result<(), String> {
+/// Create a new tab webview, positioned under the top bar. The frontend
+/// passes `top` (in CSS pixels) so the webview stays in sync with a
+/// dynamic top bar (tabs + toolbar + optional bookmarks bar).
+pub fn create_tab(app: &AppHandle, tab_id: &str, url: &str, top: f64) -> Result<(), String> {
     let label = tab_label(tab_id);
     let url: Url = url.parse().map_err(s)?;
 
@@ -44,7 +41,7 @@ pub fn create_tab(app: &AppHandle, tab_id: &str, url: &str) -> Result<(), String
         .ok_or_else(|| "main window not found".to_string())?;
     let scale = window.scale_factor().map_err(s)?;
     let inner = window.inner_size().map_err(s)?;
-    let top_px = (TOP_BAR_HEIGHT * scale).round() as u32;
+    let top_px = (top.max(0.0) * scale).round() as u32;
 
     let emit_id = tab_id.to_string();
     let builder = WebviewBuilder::new(&label, WebviewUrl::External(url)).on_page_load(
@@ -119,19 +116,24 @@ pub fn navigate_tab(app: &AppHandle, tab_id: &str, url: &str) -> Result<(), Stri
     Ok(())
 }
 
-/// Resize all tab webviews. Called from the frontend on window resize.
-/// Width/height come in as CSS (= logical) pixels.
-pub fn resize_all(app: &AppHandle, width: f64, height: f64) -> Result<(), String> {
+/// Reposition and resize every tab webview. Called by the frontend any time
+/// the window resizes *or* the top bar changes height (e.g. when the
+/// bookmarks bar toggles). `top`, `width`, `height` are CSS (= logical) pixels.
+pub fn set_content_frame(app: &AppHandle, top: f64, width: f64, height: f64) -> Result<(), String> {
     let Some(window) = app.get_window("main") else {
         return Ok(());
     };
     let scale = window.scale_factor().map_err(s)?;
+    let t = (top.max(0.0) * scale).round() as u32;
     let w = (width.max(0.0) * scale).round() as u32;
     let h = (height.max(0.0) * scale).round() as u32;
     for (label, webview) in app.webviews() {
         if !label.starts_with(TAB_PREFIX) {
             continue;
         }
+        webview
+            .set_position(PhysicalPosition::new(0i32, t as i32))
+            .map_err(s)?;
         webview.set_size(PhysicalSize::new(w, h)).map_err(s)?;
     }
     Ok(())
