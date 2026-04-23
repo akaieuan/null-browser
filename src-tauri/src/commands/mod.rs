@@ -6,5 +6,6 @@
 pub mod ai;
 pub mod bookmarks;
 pub mod history;
+pub mod meta;
 pub mod network;
 pub mod tabs;
