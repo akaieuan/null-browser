@@ -20,6 +20,11 @@ pub fn activate_tab(app: AppHandle, id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub fn hide_all_tabs(app: AppHandle) -> Result<(), String> {
+    webview::hide_all(&app)
+}
+
+#[tauri::command]
 pub fn navigate_tab(app: AppHandle, id: String, url: String) -> Result<(), String> {
     webview::navigate_tab(&app, &id, &url)
 }

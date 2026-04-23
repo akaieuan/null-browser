@@ -96,6 +96,18 @@ pub fn activate(app: &AppHandle, tab_id: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Hide every tab webview. Used when the active tab has no URL yet — the
+/// React shell shows the Null landing page through.
+pub fn hide_all(app: &AppHandle) -> Result<(), String> {
+    for (label, webview) in app.webviews() {
+        if !label.starts_with(TAB_PREFIX) {
+            continue;
+        }
+        webview.hide().map_err(s)?;
+    }
+    Ok(())
+}
+
 /// Navigate a specific tab to a new URL.
 pub fn navigate_tab(app: &AppHandle, tab_id: &str, url: &str) -> Result<(), String> {
     let label = tab_label(tab_id);

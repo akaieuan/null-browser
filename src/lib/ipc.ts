@@ -6,6 +6,7 @@ export const ipc = {
   openTab: (id: string, url: string) => invoke<void>("open_tab", { id, url }),
   closeTab: (id: string) => invoke<void>("close_tab", { id }),
   activateTab: (id: string) => invoke<void>("activate_tab", { id }),
+  hideAllTabs: () => invoke<void>("hide_all_tabs"),
   navigateTab: (id: string, url: string) =>
     invoke<void>("navigate_tab", { id, url }),
 

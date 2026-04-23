@@ -1,8 +1,18 @@
 import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { ipc } from "./lib/ipc";
-import { THEMES, type ThemeId, useTheme } from "./lib/theme";
-import { resolveQuery } from "./lib/url";
+import {
+  ChevronLeft,
+  ChevronRight,
+  Plus,
+  RotateCw,
+  X,
+} from "lucide-react";
+
+import { Button } from "@/components/ui/button";
+import { ipc } from "@/lib/ipc";
+import { THEMES, type ThemeId, useTheme } from "@/lib/theme";
+import { resolveQuery } from "@/lib/url";
+import { cn } from "@/lib/utils";
 
 // Matches `TOP_BAR_HEIGHT` in src-tauri/src/webview/mod.rs.
 const TOP_BAR_HEIGHT = 80;
@@ -14,7 +24,15 @@ const isMac =
   typeof navigator !== "undefined" && /Mac/i.test(navigator.userAgent);
 const TRAFFIC_LIGHT_INSET = isMac ? 76 : 8;
 
-type Tab = { id: string; url: string; title: string };
+type Tab = {
+  id: string;
+  url: string;
+  title: string;
+  /** True once a content webview has been created for this tab. A tab starts
+   * life with `hasWebview = false`; we only spawn the webview on first
+   * navigation so blank tabs stay as the React landing page. */
+  hasWebview: boolean;
+};
 
 const BLANK_URL = "about:blank";
 
@@ -41,6 +59,10 @@ function App() {
   const [, setTheme] = useTheme();
   const inputRef = useRef<HTMLInputElement>(null);
   const focusedRef = useRef(false);
+
+  const activeTab = tabs.find((t) => t.id === activeId) ?? null;
+  const hasActiveWebview = activeTab?.hasWebview ?? false;
+  const showLanding = !activeTab || !activeTab.hasWebview;
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -71,7 +93,9 @@ function App() {
     const promise = listen<{ id: string; url: string }>("tab-updated", (e) => {
       const { id, url } = e.payload;
       setTabs((prev) =>
-        prev.map((t) => (t.id === id ? { ...t, url, title: hostnameFor(url) } : t)),
+        prev.map((t) =>
+          t.id === id ? { ...t, url, title: hostnameFor(url) } : t,
+        ),
       );
       if (id === activeId && !focusedRef.current) setInput(url);
     });
@@ -119,31 +143,55 @@ function App() {
 
   async function openNewTab(url: string = BLANK_URL) {
     const id = uuid();
-    await ipc.openTab(id, url);
-    await ipc.activateTab(id);
-    setTabs((prev) => [...prev, { id, url, title: hostnameFor(url) }]);
+    if (url !== BLANK_URL) {
+      await ipc.openTab(id, url);
+      await ipc.activateTab(id);
+    } else {
+      await ipc.hideAllTabs();
+    }
+    setTabs((prev) => [
+      ...prev,
+      {
+        id,
+        url,
+        title: hostnameFor(url),
+        hasWebview: url !== BLANK_URL,
+      },
+    ]);
     setActiveId(id);
     setInput(url === BLANK_URL ? "" : url);
     inputRef.current?.focus();
   }
 
   async function activateTabById(id: string) {
-    await ipc.activateTab(id);
-    setActiveId(id);
     const tab = tabs.find((t) => t.id === id);
-    setInput(tab && tab.url !== BLANK_URL ? tab.url : "");
+    if (!tab) return;
+    if (tab.hasWebview) {
+      await ipc.activateTab(id);
+    } else {
+      await ipc.hideAllTabs();
+    }
+    setActiveId(id);
+    setInput(tab.url !== BLANK_URL ? tab.url : "");
   }
 
   async function closeTabById(id: string) {
-    await ipc.closeTab(id);
+    const tab = tabs.find((t) => t.id === id);
+    if (tab?.hasWebview) {
+      await ipc.closeTab(id);
+    }
     const remaining = tabs.filter((t) => t.id !== id);
     setTabs(remaining);
     if (activeId === id) {
       if (remaining.length > 0) {
         const next = remaining[remaining.length - 1];
-        await ipc.activateTab(next.id);
+        if (next.hasWebview) {
+          await ipc.activateTab(next.id);
+        } else {
+          await ipc.hideAllTabs();
+        }
         setActiveId(next.id);
-        setInput(next.url === BLANK_URL ? "" : next.url);
+        setInput(next.url !== BLANK_URL ? next.url : "");
       } else {
         setActiveId(null);
         setInput("");
@@ -155,17 +203,29 @@ function App() {
     e.preventDefault();
     const url = resolveQuery(input);
     if (!url) return;
-    if (activeId) {
-      await ipc.navigateTab(activeId, url);
-      setTabs((prev) =>
-        prev.map((t) =>
-          t.id === activeId ? { ...t, url, title: hostnameFor(url) } : t,
-        ),
-      );
-    } else {
+
+    if (!activeId) {
       await openNewTab(url);
       return;
     }
+
+    const tab = tabs.find((t) => t.id === activeId);
+    if (!tab) return;
+
+    if (tab.hasWebview) {
+      await ipc.navigateTab(activeId, url);
+    } else {
+      // First navigation on this tab — create its webview now.
+      await ipc.openTab(activeId, url);
+      await ipc.activateTab(activeId);
+    }
+    setTabs((prev) =>
+      prev.map((t) =>
+        t.id === activeId
+          ? { ...t, url, title: hostnameFor(url), hasWebview: true }
+          : t,
+      ),
+    );
     setInput(url);
     inputRef.current?.blur();
   }
@@ -175,66 +235,76 @@ function App() {
       {/* Row 1: tab strip */}
       <div
         data-tauri-drag-region
-        className="flex shrink-0 items-end gap-px bg-muted/40"
+        className="flex shrink-0 items-end gap-1 bg-muted/40"
         style={{
           height: TAB_STRIP_HEIGHT,
           paddingLeft: TRAFFIC_LIGHT_INSET,
           paddingRight: 8,
         }}
       >
-        <div className="flex min-w-0 flex-1 items-end gap-px overflow-x-auto">
+        <div className="flex min-w-0 flex-1 items-end gap-1 overflow-x-auto">
           {tabs.map((tab) => (
             <TabPill
               key={tab.id}
               tab={tab}
               active={tab.id === activeId}
-              canClose={tabs.length > 1 || tab.url !== BLANK_URL}
+              canClose={tabs.length > 1 || tab.hasWebview}
               onActivate={() => activateTabById(tab.id)}
               onClose={() => closeTabById(tab.id)}
             />
           ))}
         </div>
-        <IconButton
-          label="New Tab"
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label="New Tab"
           onClick={() => openNewTab()}
           className="mb-1 ml-1"
         >
-          <Plus />
-        </IconButton>
+          <Plus strokeWidth={1.5} />
+        </Button>
       </div>
 
       {/* Row 2: toolbar */}
       <div
         data-tauri-drag-region
-        className="flex shrink-0 items-center gap-1 border-b border-border bg-background px-2"
+        className="flex shrink-0 items-center gap-1 bg-muted/40 px-2"
         style={{ height: TOP_BAR_HEIGHT - TAB_STRIP_HEIGHT }}
       >
-        <IconButton
-          label="Back"
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label="Back"
+          disabled={!hasActiveWebview}
           onClick={() => activeId && ipc.goBack(activeId)}
-          disabled={!activeId}
         >
-          <ChevronLeft />
-        </IconButton>
-        <IconButton
-          label="Forward"
+          <ChevronLeft strokeWidth={1.5} />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label="Forward"
+          disabled={!hasActiveWebview}
           onClick={() => activeId && ipc.goForward(activeId)}
-          disabled={!activeId}
         >
-          <ChevronRight />
-        </IconButton>
-        <IconButton
-          label="Reload"
+          <ChevronRight strokeWidth={1.5} />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label="Reload"
+          disabled={!hasActiveWebview}
           onClick={() => activeId && ipc.reload(activeId)}
-          disabled={!activeId}
         >
-          <Reload />
-        </IconButton>
+          <RotateCw strokeWidth={1.5} />
+        </Button>
 
         <form
           onSubmit={handleSubmit}
-          className="mx-auto w-full"
-          style={{ maxWidth: 480 }}
+          className={cn(
+            "w-full",
+            hasActiveWebview ? "flex-1" : "mx-auto max-w-[480px]",
+          )}
         >
           <input
             ref={inputRef}
@@ -251,17 +321,22 @@ function App() {
             spellCheck={false}
             autoCapitalize="off"
             autoCorrect="off"
-            className="h-7 w-full rounded-md border border-border bg-input px-3 text-center text-sm text-foreground placeholder:text-muted-foreground focus:border-ring focus:bg-accent focus:text-left focus:outline-none"
+            className={cn(
+              "h-7 w-full rounded-md border border-border bg-input px-3 text-sm text-foreground placeholder:text-muted-foreground focus:border-ring focus:bg-accent focus:outline-none",
+              hasActiveWebview ? "text-left" : "text-center focus:text-left",
+            )}
           />
         </form>
 
-        <ThemeSwitcher />
+        <div className="w-16 shrink-0" />
       </div>
 
-      {tabs.length === 0 && (
-        <div className="flex flex-1 flex-col items-center justify-center gap-6">
-          <div className="flex items-center gap-3 text-foreground">
-            <span className="text-3xl font-medium tracking-tight">Null</span>
+      {showLanding && (
+        <div className="flex flex-1 flex-col items-center justify-center gap-8">
+          <div className="flex items-center gap-1.5 text-foreground">
+            <span className="text-3xl font-extralight tracking-tight">
+              Null
+            </span>
             <NullMark />
           </div>
           <div className="flex flex-col items-center gap-1 text-sm text-muted-foreground">
@@ -270,6 +345,7 @@ function App() {
               ⌘T new tab · ⌘W close · ⌘L focus · ⌘R reload · ⌘[ back · ⌘] forward
             </div>
           </div>
+          <ThemePicker />
         </div>
       )}
     </div>
@@ -292,12 +368,12 @@ function TabPill({
   return (
     <div
       onClick={onActivate}
-      className={
-        "group relative flex h-7 min-w-0 max-w-[200px] flex-1 cursor-default items-center gap-2 rounded-t-md border-b-0 px-3 text-xs transition-colors " +
-        (active
-          ? "border border-border bg-background text-foreground"
-          : "border border-transparent text-muted-foreground hover:bg-background/60 hover:text-foreground")
-      }
+      className={cn(
+        "group relative flex h-7 min-w-0 max-w-[200px] flex-1 cursor-default items-center gap-2 rounded-md px-3 text-xs transition-colors",
+        active
+          ? "bg-background text-foreground"
+          : "text-muted-foreground hover:bg-background/50 hover:text-foreground",
+      )}
     >
       <span className="min-w-0 flex-1 truncate">{tab.title}</span>
       {canClose && (
@@ -310,129 +386,43 @@ function TabPill({
           aria-label="Close tab"
           className="shrink-0 rounded p-0.5 text-muted-foreground opacity-0 hover:bg-accent hover:text-foreground group-hover:opacity-100"
         >
-          <XSmall />
+          <X size={10} strokeWidth={1.5} />
         </button>
       )}
     </div>
   );
 }
 
-function ThemeSwitcher() {
+function ThemePicker() {
   const [theme, setTheme] = useTheme();
+  const active = THEMES.find((t) => t.id === theme) ?? THEMES[0];
   return (
-    <div className="flex shrink-0 items-center gap-1 pl-1">
-      {THEMES.map((t) => (
-        <button
-          key={t.id}
-          type="button"
-          aria-label={t.label}
-          title={t.label}
-          onClick={() => setTheme(t.id)}
-          className={
-            "h-4 w-4 rounded-full border " +
-            (theme === t.id ? "border-foreground" : "border-border")
-          }
-          style={{ background: t.swatch }}
-        />
-      ))}
+    <div className="flex flex-col items-center gap-2">
+      <div className="flex items-center gap-2.5">
+        {THEMES.map((t) => {
+          const selected = theme === t.id;
+          return (
+            <button
+              key={t.id}
+              type="button"
+              aria-label={t.label}
+              aria-pressed={selected}
+              title={t.label}
+              onClick={() => setTheme(t.id)}
+              className={cn(
+                "h-6 w-6 rounded-full border transition",
+                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+                selected
+                  ? "border-foreground ring-2 ring-ring ring-offset-2 ring-offset-background"
+                  : "border-border opacity-70 hover:opacity-100",
+              )}
+              style={{ background: t.swatch }}
+            />
+          );
+        })}
+      </div>
+      <div className="text-xs text-subtle">{active.label}</div>
     </div>
-  );
-}
-
-function IconButton({
-  label,
-  onClick,
-  disabled,
-  className = "",
-  children,
-}: {
-  label: string;
-  onClick: () => void;
-  disabled?: boolean;
-  className?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      aria-label={label}
-      onClick={onClick}
-      disabled={disabled}
-      className={
-        "flex h-7 w-7 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground active:bg-accent disabled:opacity-30 disabled:hover:bg-transparent " +
-        className
-      }
-    >
-      {children}
-    </button>
-  );
-}
-
-function ChevronLeft() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-      <path
-        d="M10 3L5 8L10 13"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
-function ChevronRight() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-      <path
-        d="M6 3L11 8L6 13"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
-function Reload() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-      <path
-        d="M13.5 8A5.5 5.5 0 1 1 8 2.5c1.5 0 2.9.6 3.9 1.6M13.5 3v2.5h-2.5"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
-function Plus() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-      <path
-        d="M8 3V13M3 8H13"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-      />
-    </svg>
-  );
-}
-
-function XSmall() {
-  return (
-    <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
-      <path
-        d="M2 2L8 8M8 2L2 8"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-      />
-    </svg>
   );
 }
 

@@ -1,6 +1,13 @@
 import { useEffect, useState } from "react";
 
-export type ThemeId = "charcoal" | "slate" | "sand" | "paper";
+export type ThemeId =
+  | "charcoal"
+  | "slate"
+  | "sand"
+  | "paper"
+  | "0400am"
+  | "mudd"
+  | "cyberspace";
 
 export interface Theme {
   id: ThemeId;
@@ -13,6 +20,9 @@ export const THEMES: Theme[] = [
   { id: "slate", label: "Slate", swatch: "#334b6b" },
   { id: "sand", label: "Sand", swatch: "#8b6b45" },
   { id: "paper", label: "Paper", swatch: "#f4f2ec" },
+  { id: "0400am", label: "0400AM", swatch: "oklch(0.686 0.143 285.656)" },
+  { id: "mudd", label: "Mudd", swatch: "oklch(0.707 0.108 152.216)" },
+  { id: "cyberspace", label: "Cyberspace", swatch: "oklch(0.748 0.043 31.264)" },
 ];
 
 export const DEFAULT_THEME: ThemeId = "charcoal";
