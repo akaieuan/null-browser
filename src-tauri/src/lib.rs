@@ -1,3 +1,5 @@
+use tauri::Manager;
+
 pub mod ai;
 pub mod commands;
 pub mod network;
@@ -10,6 +12,10 @@ pub mod webview;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .setup(|app| {
+            app.manage(storage::Storage::open());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             commands::meta::get_app_version,
         ])
