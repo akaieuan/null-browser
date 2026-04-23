@@ -14,9 +14,14 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             app.manage(storage::Storage::open());
+            webview::init(app.handle()).expect("init content webview");
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![commands::meta::get_app_version,])
+        .invoke_handler(tauri::generate_handler![
+            commands::meta::get_app_version,
+            commands::tabs::navigate,
+            commands::tabs::resize_content,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
