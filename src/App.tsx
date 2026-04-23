@@ -3,15 +3,23 @@ import { listen } from "@tauri-apps/api/event";
 import {
   ChevronLeft,
   ChevronRight,
+  History as HistoryIcon,
   Plus,
   RotateCw,
+  Settings as SettingsIcon,
+  Sparkles,
   Star,
+  User,
   X,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { AI_DRAWER_WIDTH, AIDrawer } from "@/components/panels/AIDrawer";
+import { HistoryPanel } from "@/components/panels/HistoryPanel";
+import { ProfileMenu } from "@/components/panels/ProfileMenu";
+import { SettingsPanel } from "@/components/panels/SettingsPanel";
 import { ipc, type Bookmark } from "@/lib/ipc";
-import { THEMES, type ThemeId, useTheme } from "@/lib/theme";
+import { type ThemeId, useTheme } from "@/lib/theme";
 import { resolveQuery } from "@/lib/url";
 import { cn } from "@/lib/utils";
 
@@ -34,6 +42,7 @@ type Tab = {
 };
 
 const BLANK_URL = "about:blank";
+const PROFILE_NAME = "Null";
 
 function uuid(): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -56,13 +65,18 @@ function App() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [input, setInput] = useState("");
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
+  const [showAiDrawer, setShowAiDrawer] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [, setTheme] = useTheme();
   const inputRef = useRef<HTMLInputElement>(null);
   const focusedRef = useRef(false);
 
   const activeTab = tabs.find((t) => t.id === activeId) ?? null;
   const hasActiveWebview = activeTab?.hasWebview ?? false;
-  const showLanding = !activeTab || !activeTab.hasWebview;
+  const modalOpen = showSettings || showHistory;
+  const showLanding = !modalOpen && (!activeTab || !activeTab.hasWebview);
   const showBookmarkBar = bookmarks.length > 0;
 
   const topBarHeight =
@@ -91,21 +105,33 @@ function App() {
     };
   }, [setTheme]);
 
-  // Resize + reposition content webview any time the window resizes or the
-  // top bar's height changes (e.g. the bookmarks bar appearing).
+  // Resize + reposition content webview any time the window resizes, the
+  // top bar's height changes (bookmarks bar appearing), or the AI drawer
+  // toggles (narrows the content to make room).
   useEffect(() => {
     const sync = () =>
       ipc
         .resizeContent(
           topBarHeight,
-          window.innerWidth,
+          window.innerWidth - (showAiDrawer ? AI_DRAWER_WIDTH : 0),
           window.innerHeight - topBarHeight,
         )
         .catch(() => {});
     window.addEventListener("resize", sync);
     sync();
     return () => window.removeEventListener("resize", sync);
-  }, [topBarHeight]);
+  }, [topBarHeight, showAiDrawer]);
+
+  // Full-screen modals hide all tabs; closing them reactivates the tab.
+  useEffect(() => {
+    if (modalOpen) {
+      ipc.hideAllTabs().catch(() => {});
+    } else if (activeId) {
+      const tab = tabs.find((t) => t.id === activeId);
+      if (tab?.hasWebview) ipc.activateTab(activeId).catch(() => {});
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modalOpen]);
 
   useEffect(() => {
     const promise = listen<{ id: string; url: string }>("tab-updated", (e) => {
@@ -234,9 +260,26 @@ function App() {
     }
   }, [activeTab, activeBookmark]);
 
+  const closeAllOverlays = useCallback(() => {
+    setShowSettings(false);
+    setShowHistory(false);
+    setShowAiDrawer(false);
+    setProfileMenuOpen(false);
+  }, []);
+
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const meta = e.metaKey || e.ctrlKey;
+
+      // Panels and drawer have their own unmodified Esc behavior.
+      if (e.key === "Escape") {
+        if (showSettings || showHistory || showAiDrawer || profileMenuOpen) {
+          e.preventDefault();
+          closeAllOverlays();
+          return;
+        }
+      }
+
       if (!meta) return;
       switch (e.key) {
         case "l":
@@ -260,6 +303,20 @@ function App() {
           e.preventDefault();
           toggleBookmark();
           break;
+        case "y":
+          e.preventDefault();
+          setShowSettings(false);
+          setShowHistory((v) => !v);
+          break;
+        case ",":
+          e.preventDefault();
+          setShowHistory(false);
+          setShowSettings((v) => !v);
+          break;
+        case "/":
+          e.preventDefault();
+          setShowAiDrawer((v) => !v);
+          break;
         case "[":
           e.preventDefault();
           if (activeId) ipc.goBack(activeId);
@@ -272,7 +329,17 @@ function App() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [activeId, openNewTab, closeTabById, toggleBookmark]);
+  }, [
+    activeId,
+    openNewTab,
+    closeTabById,
+    toggleBookmark,
+    showSettings,
+    showHistory,
+    showAiDrawer,
+    profileMenuOpen,
+    closeAllOverlays,
+  ]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -402,7 +469,58 @@ function App() {
           </div>
         </form>
 
-        <div className="w-16 shrink-0" />
+        <div className="flex shrink-0 items-center gap-1">
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="History"
+            onClick={() => {
+              setShowSettings(false);
+              setShowHistory((v) => !v);
+            }}
+            className={cn(showHistory && "bg-muted text-foreground")}
+          >
+            <HistoryIcon strokeWidth={1.5} />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="Chat"
+            onClick={() => setShowAiDrawer((v) => !v)}
+            className={cn(showAiDrawer && "bg-muted text-foreground")}
+          >
+            <Sparkles strokeWidth={1.5} />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="Settings"
+            onClick={() => {
+              setShowHistory(false);
+              setShowSettings((v) => !v);
+            }}
+            className={cn(showSettings && "bg-muted text-foreground")}
+          >
+            <SettingsIcon strokeWidth={1.5} />
+          </Button>
+          <div className="relative">
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label="Profile"
+              onClick={() => setProfileMenuOpen((v) => !v)}
+              className={cn(profileMenuOpen && "bg-muted text-foreground")}
+            >
+              <User strokeWidth={1.5} />
+            </Button>
+            {profileMenuOpen && (
+              <ProfileMenu
+                profileName={PROFILE_NAME}
+                onClose={() => setProfileMenuOpen(false)}
+              />
+            )}
+          </div>
+        </div>
       </div>
 
       {/* Row 3: bookmarks bar (only when there are bookmarks).
@@ -422,23 +540,36 @@ function App() {
         </div>
       )}
 
-      {showLanding && (
-        <div className="flex flex-1 flex-col items-center justify-center gap-8 px-8">
-          <div className="flex items-center gap-1.5 text-foreground">
-            <span className="text-3xl font-extralight tracking-tight">
-              Null
-            </span>
-            <NullMark />
-          </div>
-          <div className="flex flex-col items-center gap-1 text-sm text-muted-foreground">
-            <div>Type a URL and press enter.</div>
-            <div className="text-xs text-subtle">
-              ⌘T new tab · ⌘W close · ⌘L focus · ⌘D bookmark · ⌘R reload
+      {/* Below the top bars: content area + AI drawer side-by-side.
+          Content webview is positioned here by Tauri; React just manages
+          landing/panels/drawer on top. */}
+      <div className="relative flex flex-1 min-h-0">
+        <div className="relative flex-1">
+          {showLanding && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-8 px-8">
+              <div className="flex items-center gap-1.5 text-foreground">
+                <span className="text-3xl font-extralight tracking-tight">
+                  Null
+                </span>
+                <NullMark />
+              </div>
+              <div className="flex flex-col items-center gap-1 text-sm text-muted-foreground">
+                <div>Type a URL and press enter.</div>
+                <div className="text-xs text-subtle">
+                  ⌘T new tab · ⌘W close · ⌘L focus · ⌘D bookmark · ⌘, settings
+                </div>
+              </div>
             </div>
-          </div>
-          <ThemePicker />
+          )}
+          {showSettings && (
+            <SettingsPanel onClose={() => setShowSettings(false)} />
+          )}
+          {showHistory && (
+            <HistoryPanel onClose={() => setShowHistory(false)} />
+          )}
         </div>
-      )}
+        {showAiDrawer && <AIDrawer onClose={() => setShowAiDrawer(false)} />}
+      </div>
     </div>
   );
 }
@@ -500,39 +631,6 @@ function BookmarkBarItem({
     >
       <span className="truncate">{bookmark.title}</span>
     </button>
-  );
-}
-
-function ThemePicker() {
-  const [theme, setTheme] = useTheme();
-  const active = THEMES.find((t) => t.id === theme) ?? THEMES[0];
-  return (
-    <div className="flex flex-col items-center gap-2">
-      <div className="flex items-center gap-2.5">
-        {THEMES.map((t) => {
-          const selected = theme === t.id;
-          return (
-            <button
-              key={t.id}
-              type="button"
-              aria-label={t.label}
-              aria-pressed={selected}
-              title={t.label}
-              onClick={() => setTheme(t.id)}
-              className={cn(
-                "h-6 w-6 rounded-full border transition",
-                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
-                selected
-                  ? "border-foreground ring-2 ring-ring ring-offset-2 ring-offset-background"
-                  : "border-border opacity-70 hover:opacity-100",
-              )}
-              style={{ background: t.swatch }}
-            />
-          );
-        })}
-      </div>
-      <div className="text-xs text-subtle">{active.label}</div>
-    </div>
   );
 }
 

@@ -2,6 +2,7 @@ use tauri::Manager;
 
 pub mod ai;
 pub mod commands;
+pub mod dock;
 pub mod menu;
 pub mod network;
 pub mod permissions;
@@ -14,6 +15,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
+            dock::set_icon();
             app.manage(storage::Storage::open());
             let menu = menu::build(app.handle())?;
             app.set_menu(menu)?;
