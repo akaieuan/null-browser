@@ -14,7 +14,6 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             app.manage(storage::Storage::open());
-            webview::init(app.handle()).expect("init content webview");
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

@@ -7,6 +7,7 @@ const TOP_BAR_HEIGHT = 40;
 
 function App() {
   const [input, setInput] = useState("");
+  const [navigated, setNavigated] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -31,15 +32,19 @@ function App() {
     if (!url) return;
     await ipc.navigate(url);
     setInput(url);
+    setNavigated(true);
   }
 
   return (
-    <div className="h-screen bg-neutral-950 text-neutral-100">
+    <div className="flex h-screen flex-col bg-neutral-950 text-neutral-100">
       <form
         onSubmit={handleSubmit}
-        className="flex h-10 items-center gap-2 border-b border-neutral-800/80 bg-neutral-950 px-3"
+        className="flex shrink-0 items-center gap-3 border-b border-neutral-800 bg-neutral-900 px-4"
         style={{ height: TOP_BAR_HEIGHT }}
       >
+        <span className="select-none text-sm font-medium tracking-tight text-neutral-400">
+          Null
+        </span>
         <input
           ref={inputRef}
           type="text"
@@ -49,9 +54,14 @@ function App() {
           spellCheck={false}
           autoCapitalize="off"
           autoCorrect="off"
-          className="h-7 flex-1 rounded-md bg-neutral-900 px-3 text-sm text-neutral-100 placeholder:text-neutral-500 focus:outline-none focus:ring-1 focus:ring-neutral-700"
+          className="h-7 flex-1 rounded-md border border-neutral-700 bg-neutral-800 px-3 text-sm text-neutral-100 placeholder:text-neutral-500 focus:border-neutral-500 focus:outline-none"
         />
       </form>
+      {!navigated && (
+        <div className="flex flex-1 items-center justify-center text-sm text-neutral-600">
+          Type a URL and press enter.
+        </div>
+      )}
     </div>
   );
 }

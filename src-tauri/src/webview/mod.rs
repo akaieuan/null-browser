@@ -5,8 +5,16 @@
 //! tab strip at the top) and `content` (the browser tab itself,
 //! positioned below the top bar). All browsing happens in `content`;
 //! the React side never sees user page content.
+//!
+//! The content webview is created **lazily** — on the first call to
+//! [`navigate`]. This sidesteps two problems at once: we never have
+//! an empty blank webview floating in the UI, and we never have to
+//! guess the window's final size during startup (where `inner_size`
+//! isn't reliable yet).
 
-use tauri::{AppHandle, LogicalPosition, LogicalSize, Manager, Url, WebviewBuilder, WebviewUrl};
+use tauri::{
+    AppHandle, Manager, PhysicalPosition, PhysicalSize, Url, WebviewBuilder, WebviewUrl,
+};
 
 /// Label used to identify the content webview in state lookups.
 pub const CONTENT_LABEL: &str = "content";
@@ -19,48 +27,43 @@ fn s<E: std::fmt::Display>(e: E) -> String {
     e.to_string()
 }
 
-/// Create the content webview as a child of the main window.
-///
-/// Starts at `about:blank` so the app makes zero outbound connections
-/// on launch — the first network call happens when the user types a
-/// URL into the address bar.
-pub fn init(app: &AppHandle) -> Result<(), String> {
+/// Navigate the content webview to `url`, creating it if it doesn't exist yet.
+pub fn navigate(app: &AppHandle, url: &str) -> Result<(), String> {
+    let url: Url = url.parse().map_err(s)?;
+
+    if let Some(webview) = app.get_webview(CONTENT_LABEL) {
+        webview.navigate(url).map_err(s)?;
+        return Ok(());
+    }
+
     let window = app
         .get_window("main")
         .ok_or_else(|| "main window not found".to_string())?;
     let scale = window.scale_factor().map_err(s)?;
-    let size = window.inner_size().map_err(s)?.to_logical::<f64>(scale);
+    let inner = window.inner_size().map_err(s)?;
+    let top_px = (TOP_BAR_HEIGHT * scale).round() as u32;
 
-    let url: Url = "about:blank".parse().map_err(s)?;
     window
         .add_child(
             WebviewBuilder::new(CONTENT_LABEL, WebviewUrl::External(url)),
-            LogicalPosition::new(0.0, TOP_BAR_HEIGHT),
-            LogicalSize::new(size.width, (size.height - TOP_BAR_HEIGHT).max(0.0)),
+            PhysicalPosition::new(0i32, top_px as i32),
+            PhysicalSize::new(inner.width, inner.height.saturating_sub(top_px)),
         )
         .map_err(s)?;
 
     Ok(())
 }
 
-/// Navigate the content webview to a new URL.
-pub fn navigate(app: &AppHandle, url: &str) -> Result<(), String> {
-    let webview = app
-        .webviews()
-        .get(CONTENT_LABEL)
-        .cloned()
-        .ok_or_else(|| "content webview not found".to_string())?;
-    let url: Url = url.parse().map_err(s)?;
-    webview.navigate(url).map_err(s)?;
-    Ok(())
-}
-
-/// Resize the content webview. Called from the frontend on window resize.
+/// Resize the content webview. Called from the frontend on window resize
+/// with the new content-area dimensions in CSS (= logical) pixels.
+/// No-op if the webview hasn't been created yet.
 pub fn resize(app: &AppHandle, width: f64, height: f64) -> Result<(), String> {
-    if let Some(webview) = app.webviews().get(CONTENT_LABEL) {
-        webview
-            .set_size(LogicalSize::new(width.max(0.0), height.max(0.0)))
-            .map_err(s)?;
-    }
+    let Some(webview) = app.get_webview(CONTENT_LABEL) else {
+        return Ok(());
+    };
+    let scale = webview.window().scale_factor().map_err(s)?;
+    let w = (width.max(0.0) * scale).round() as u32;
+    let h = (height.max(0.0) * scale).round() as u32;
+    webview.set_size(PhysicalSize::new(w, h)).map_err(s)?;
     Ok(())
 }
