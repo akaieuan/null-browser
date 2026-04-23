@@ -13,7 +13,8 @@
 //! isn't reliable yet).
 
 use tauri::{
-    AppHandle, Manager, PhysicalPosition, PhysicalSize, Url, WebviewBuilder, WebviewUrl,
+    webview::PageLoadEvent, AppHandle, Emitter, EventTarget, Manager, PhysicalPosition,
+    PhysicalSize, Url, WebviewBuilder, WebviewUrl,
 };
 
 /// Label used to identify the content webview in state lookups.
@@ -21,7 +22,10 @@ pub const CONTENT_LABEL: &str = "content";
 
 /// Height of the top bar (address bar + future tab strip), in logical pixels.
 /// Duplicated in `src/App.tsx` as `TOP_BAR_HEIGHT`. Keep them in sync.
-pub const TOP_BAR_HEIGHT: f64 = 40.0;
+pub const TOP_BAR_HEIGHT: f64 = 44.0;
+
+/// Event name the content webview emits to the UI whenever its URL changes.
+pub const URL_CHANGED: &str = "content-url-changed";
 
 fn s<E: std::fmt::Display>(e: E) -> String {
     e.to_string()
@@ -43,9 +47,20 @@ pub fn navigate(app: &AppHandle, url: &str) -> Result<(), String> {
     let inner = window.inner_size().map_err(s)?;
     let top_px = (TOP_BAR_HEIGHT * scale).round() as u32;
 
+    let builder = WebviewBuilder::new(CONTENT_LABEL, WebviewUrl::External(url))
+        .on_page_load(|webview, payload| {
+            if matches!(payload.event(), PageLoadEvent::Finished) {
+                let _ = webview.app_handle().emit_to(
+                    EventTarget::webview("main"),
+                    URL_CHANGED,
+                    payload.url().to_string(),
+                );
+            }
+        });
+
     window
         .add_child(
-            WebviewBuilder::new(CONTENT_LABEL, WebviewUrl::External(url)),
+            builder,
             PhysicalPosition::new(0i32, top_px as i32),
             PhysicalSize::new(inner.width, inner.height.saturating_sub(top_px)),
         )
@@ -66,4 +81,30 @@ pub fn resize(app: &AppHandle, width: f64, height: f64) -> Result<(), String> {
     let h = (height.max(0.0) * scale).round() as u32;
     webview.set_size(PhysicalSize::new(w, h)).map_err(s)?;
     Ok(())
+}
+
+/// Go back one entry in the content webview's history. No-op if the webview
+/// doesn't exist or there's nothing to go back to.
+pub fn go_back(app: &AppHandle) -> Result<(), String> {
+    let Some(webview) = app.get_webview(CONTENT_LABEL) else {
+        return Ok(());
+    };
+    webview.eval("history.back()").map_err(s)
+}
+
+/// Go forward one entry in the content webview's history. No-op if the webview
+/// doesn't exist or there's nothing to go forward to.
+pub fn go_forward(app: &AppHandle) -> Result<(), String> {
+    let Some(webview) = app.get_webview(CONTENT_LABEL) else {
+        return Ok(());
+    };
+    webview.eval("history.forward()").map_err(s)
+}
+
+/// Reload the current page. No-op if the webview doesn't exist.
+pub fn reload(app: &AppHandle) -> Result<(), String> {
+    let Some(webview) = app.get_webview(CONTENT_LABEL) else {
+        return Ok(());
+    };
+    webview.eval("location.reload()").map_err(s)
 }

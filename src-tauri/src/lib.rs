@@ -20,6 +20,9 @@ pub fn run() {
             commands::meta::get_app_version,
             commands::tabs::navigate,
             commands::tabs::resize_content,
+            commands::tabs::go_back,
+            commands::tabs::go_forward,
+            commands::tabs::reload,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

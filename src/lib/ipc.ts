@@ -5,4 +5,7 @@ export const ipc = {
   navigate: (url: string) => invoke<void>("navigate", { url }),
   resizeContent: (width: number, height: number) =>
     invoke<void>("resize_content", { width, height }),
+  goBack: () => invoke<void>("go_back"),
+  goForward: () => invoke<void>("go_forward"),
+  reload: () => invoke<void>("reload"),
 };
