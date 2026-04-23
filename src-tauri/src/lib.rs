@@ -16,9 +16,7 @@ pub fn run() {
             app.manage(storage::Storage::open());
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![
-            commands::meta::get_app_version,
-        ])
+        .invoke_handler(tauri::generate_handler![commands::meta::get_app_version,])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
