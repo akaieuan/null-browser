@@ -51,19 +51,6 @@ function hostnameFor(url: string): string {
   }
 }
 
-// Deterministic colored avatar from a URL's hostname. No favicon fetching —
-// zero outbound connections, consistent offline behavior, and each theme
-// still gets recognizable colors via HSL.
-function avatarFor(url: string): { letter: string; hue: number } {
-  const host = hostnameFor(url);
-  const letter = host.replace(/^www\./, "")[0]?.toUpperCase() ?? "?";
-  let hue = 0;
-  for (let i = 0; i < host.length; i++) {
-    hue = (hue * 31 + host.charCodeAt(i)) % 360;
-  }
-  return { letter, hue };
-}
-
 function App() {
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -247,11 +234,6 @@ function App() {
     }
   }, [activeTab, activeBookmark]);
 
-  const removeBookmark = useCallback(async (id: number) => {
-    await ipc.removeBookmark(id);
-    setBookmarks((prev) => prev.filter((b) => b.id !== id));
-  }, []);
-
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const meta = e.metaKey || e.ctrlKey;
@@ -423,10 +405,11 @@ function App() {
         <div className="w-16 shrink-0" />
       </div>
 
-      {/* Row 3: bookmarks bar (only when there are bookmarks) */}
+      {/* Row 3: bookmarks bar (only when there are bookmarks).
+          Shares the toolbar's bg so it reads as one continuous surface. */}
       {showBookmarkBar && (
         <div
-          className="flex shrink-0 items-center gap-0.5 overflow-x-auto border-t border-border bg-background px-2"
+          className="flex shrink-0 items-center gap-0.5 overflow-x-auto bg-muted/40 px-2 pb-1"
           style={{ height: BOOKMARK_BAR_HEIGHT }}
         >
           {bookmarks.map((b) => (
@@ -440,43 +423,20 @@ function App() {
       )}
 
       {showLanding && (
-        <div className="flex flex-1 flex-col items-center overflow-y-auto px-8 py-12">
-          <div className="flex flex-col items-center gap-6">
-            <div className="flex items-center gap-1.5 text-foreground">
-              <span className="text-3xl font-extralight tracking-tight">
-                Null
-              </span>
-              <NullMark />
-            </div>
-            <div className="flex flex-col items-center gap-1 text-sm text-muted-foreground">
-              <div>Type a URL and press enter.</div>
-              <div className="text-xs text-subtle">
-                ⌘T new tab · ⌘W close · ⌘L focus · ⌘D bookmark · ⌘R reload
-              </div>
+        <div className="flex flex-1 flex-col items-center justify-center gap-8 px-8">
+          <div className="flex items-center gap-1.5 text-foreground">
+            <span className="text-3xl font-extralight tracking-tight">
+              Null
+            </span>
+            <NullMark />
+          </div>
+          <div className="flex flex-col items-center gap-1 text-sm text-muted-foreground">
+            <div>Type a URL and press enter.</div>
+            <div className="text-xs text-subtle">
+              ⌘T new tab · ⌘W close · ⌘L focus · ⌘D bookmark · ⌘R reload
             </div>
           </div>
-
-          {bookmarks.length > 0 && (
-            <div className="mt-12 w-full max-w-3xl">
-              <div className="mb-3 text-xs font-medium uppercase tracking-wider text-subtle">
-                Bookmarks
-              </div>
-              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4">
-                {bookmarks.map((b) => (
-                  <BookmarkCard
-                    key={b.id}
-                    bookmark={b}
-                    onOpen={() => navigateTo(b.url)}
-                    onRemove={() => removeBookmark(b.id)}
-                  />
-                ))}
-              </div>
-            </div>
-          )}
-
-          <div className="mt-auto pt-12">
-            <ThemePicker />
-          </div>
+          <ThemePicker />
         </div>
       )}
     </div>
@@ -531,64 +491,15 @@ function BookmarkBarItem({
   bookmark: Bookmark;
   onClick: () => void;
 }) {
-  const { letter, hue } = avatarFor(bookmark.url);
   return (
     <button
       type="button"
       onClick={onClick}
       title={bookmark.url}
-      className="group flex h-6 max-w-[180px] shrink-0 items-center gap-1.5 rounded px-2 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+      className="flex h-6 max-w-[180px] shrink-0 items-center rounded px-2 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
     >
-      <span
-        className="flex h-4 w-4 shrink-0 items-center justify-center rounded text-[9px] font-medium text-white"
-        style={{ background: `hsl(${hue}, 30%, 45%)` }}
-      >
-        {letter}
-      </span>
       <span className="truncate">{bookmark.title}</span>
     </button>
-  );
-}
-
-function BookmarkCard({
-  bookmark,
-  onOpen,
-  onRemove,
-}: {
-  bookmark: Bookmark;
-  onOpen: () => void;
-  onRemove: () => void;
-}) {
-  const { letter, hue } = avatarFor(bookmark.url);
-  return (
-    <div
-      onClick={onOpen}
-      className="group relative flex cursor-default items-center gap-3 rounded-lg border border-border bg-muted/30 p-3 transition-colors hover:bg-muted"
-    >
-      <div
-        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-sm font-medium text-white"
-        style={{ background: `hsl(${hue}, 30%, 45%)` }}
-      >
-        {letter}
-      </div>
-      <div className="min-w-0 flex-1">
-        <div className="truncate text-sm text-foreground">{bookmark.title}</div>
-        <div className="truncate text-xs text-muted-foreground">
-          {hostnameFor(bookmark.url)}
-        </div>
-      </div>
-      <button
-        type="button"
-        aria-label="Remove bookmark"
-        onClick={(e) => {
-          e.stopPropagation();
-          onRemove();
-        }}
-        className="absolute right-1.5 top-1.5 rounded p-0.5 text-muted-foreground opacity-0 hover:bg-accent hover:text-foreground group-hover:opacity-100"
-      >
-        <X size={12} strokeWidth={1.5} />
-      </button>
-    </div>
   );
 }
 
