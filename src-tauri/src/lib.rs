@@ -1,3 +1,11 @@
+pub mod ai;
+pub mod commands;
+pub mod network;
+pub mod permissions;
+pub mod settings;
+pub mod storage;
+pub mod webview;
+
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
 fn greet(name: &str) -> String {
