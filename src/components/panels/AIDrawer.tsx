@@ -1,8 +1,9 @@
 import { ArrowUp, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { AI_DRAWER_WIDTH } from "@/lib/layout";
 
-export const AI_DRAWER_WIDTH = 380;
+export { AI_DRAWER_WIDTH };
 
 export function AIDrawer({ onClose }: { onClose: () => void }) {
   return (

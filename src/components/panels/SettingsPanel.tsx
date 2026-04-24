@@ -8,7 +8,10 @@ import { cn } from "@/lib/utils";
 
 export function SettingsPanel({ onClose }: { onClose: () => void }) {
   return (
-    <div className="absolute inset-0 z-40 flex flex-col overflow-hidden bg-background text-foreground">
+    <div
+      className="absolute inset-0 z-40 flex flex-col overflow-hidden bg-background text-foreground"
+      style={{ viewTransitionName: "panel", contain: "layout paint style" }}
+    >
       <PanelHeader title="Settings" onClose={onClose} />
       <main className="flex-1 overflow-y-auto">
         <div className="mx-auto max-w-xl space-y-14 px-8 py-10">

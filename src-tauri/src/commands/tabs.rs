@@ -48,3 +48,8 @@ pub fn go_forward(app: AppHandle, id: String) -> Result<(), String> {
 pub fn reload(app: AppHandle, id: String) -> Result<(), String> {
     webview::reload(&app, &id)
 }
+
+#[tauri::command]
+pub fn clear_tab_storage(app: AppHandle) -> Result<(), String> {
+    webview::clear_tab_storage(&app)
+}

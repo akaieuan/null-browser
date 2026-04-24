@@ -14,6 +14,15 @@ export type HistoryEntry = {
   visited_at: number;
 };
 
+export type NetworkEvent = {
+  id: number;
+  tab_id: string | null;
+  url: string;
+  origin: string;
+  kind: string;
+  at: number;
+};
+
 export const ipc = {
   getAppVersion: () => invoke<string>("get_app_version"),
 
@@ -31,6 +40,7 @@ export const ipc = {
   goBack: (id: string) => invoke<void>("go_back", { id }),
   goForward: (id: string) => invoke<void>("go_forward", { id }),
   reload: (id: string) => invoke<void>("reload", { id }),
+  clearTabStorage: () => invoke<void>("clear_tab_storage"),
 
   listBookmarks: () => invoke<Bookmark[]>("list_bookmarks"),
   addBookmark: (url: string, title: string) =>
@@ -47,4 +57,10 @@ export const ipc = {
     invoke<void>("add_history", { url, title }),
   removeHistory: (id: number) => invoke<void>("remove_history", { id }),
   clearHistory: () => invoke<void>("clear_history"),
+
+  listNetworkEvents: () => invoke<NetworkEvent[]>("list_network_events"),
+  clearNetworkEvents: () => invoke<void>("clear_network_events"),
+  setNetworkPaused: (paused: boolean) =>
+    invoke<void>("set_network_paused", { paused }),
+  networkIsPaused: () => invoke<boolean>("network_is_paused"),
 };

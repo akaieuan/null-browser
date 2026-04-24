@@ -40,15 +40,16 @@ export function HistoryPanel({
   const grouped = groupByDay(entries);
 
   return (
-    <div className="absolute inset-0 z-40 flex flex-col overflow-hidden bg-background text-foreground">
+    <div
+      className="absolute inset-0 z-40 flex flex-col overflow-hidden bg-background text-foreground"
+      style={{ viewTransitionName: "panel", contain: "layout paint style" }}
+    >
       <PanelHeader title="History" onClose={onClose} />
 
       <main className="flex-1 overflow-y-auto">
         <div className="mx-auto max-w-2xl px-8 py-8">
           {loading ? (
-            <div className="flex h-40 items-center justify-center text-xs text-muted-foreground">
-              Loading…
-            </div>
+            <HistorySkeleton />
           ) : entries.length === 0 ? (
             <EmptyState />
           ) : (
@@ -104,7 +105,10 @@ function HistoryRow({
 }) {
   const time = formatTime(entry.visited_at);
   return (
-    <div className="group flex items-center gap-3 border-b border-border py-2 last:border-b-0">
+    <div
+      className="group flex items-center gap-3 border-b border-border py-2 last:border-b-0"
+      style={{ contentVisibility: "auto", containIntrinsicSize: "auto 52px" }}
+    >
       <button
         type="button"
         onClick={onOpen}
@@ -126,6 +130,34 @@ function HistoryRow({
       >
         <X size={12} strokeWidth={1.5} />
       </button>
+    </div>
+  );
+}
+
+function HistorySkeleton() {
+  // Show a believable shell of the real list while SQLite resolves.
+  // Rows match HistoryRow's height so the layout doesn't jump.
+  return (
+    <div aria-hidden="true">
+      <div className="mb-6 flex items-center justify-between">
+        <div className="h-3 w-16 rounded bg-muted" />
+        <div className="h-3 w-16 rounded bg-muted" />
+      </div>
+      <div className="mb-2 h-3 w-20 rounded bg-muted" />
+      <div className="border-t border-border">
+        {Array.from({ length: 8 }).map((_, i) => (
+          <div
+            key={i}
+            className="flex items-center gap-3 border-b border-border py-2"
+          >
+            <div className="flex min-w-0 flex-1 flex-col gap-1">
+              <div className="h-3 w-3/5 rounded bg-muted" />
+              <div className="h-2.5 w-4/5 rounded bg-muted/60" />
+            </div>
+            <div className="h-2.5 w-10 rounded bg-muted" />
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

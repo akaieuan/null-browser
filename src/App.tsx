@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
@@ -8,6 +16,7 @@ import {
   Plus,
   RotateCw,
   Settings as SettingsIcon,
+  Activity,
   Sparkles,
   Star,
   User,
@@ -34,20 +43,51 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 
 import { Button } from "@/components/ui/button";
-import { AI_DRAWER_WIDTH, AIDrawer } from "@/components/panels/AIDrawer";
-import { HistoryPanel } from "@/components/panels/HistoryPanel";
-import { ProfileMenu } from "@/components/panels/ProfileMenu";
-import { SettingsPanel } from "@/components/panels/SettingsPanel";
+import { TopProgress } from "@/components/TopProgress";
 import { ipc, type Bookmark } from "@/lib/ipc";
+import { AI_DRAWER_WIDTH } from "@/lib/layout";
+
+// Heavy panels — loaded on first open, not on app start.
+const AIDrawer = lazy(() =>
+  import("@/components/panels/AIDrawer").then((m) => ({ default: m.AIDrawer })),
+);
+const HistoryPanel = lazy(() =>
+  import("@/components/panels/HistoryPanel").then((m) => ({
+    default: m.HistoryPanel,
+  })),
+);
+const NetworkInspector = lazy(() =>
+  import("@/components/panels/NetworkInspector").then((m) => ({
+    default: m.NetworkInspector,
+  })),
+);
+const ProfileMenu = lazy(() =>
+  import("@/components/panels/ProfileMenu").then((m) => ({
+    default: m.ProfileMenu,
+  })),
+);
+const SettingsPanel = lazy(() =>
+  import("@/components/panels/SettingsPanel").then((m) => ({
+    default: m.SettingsPanel,
+  })),
+);
 import { usePreferences, resolveStartUrl } from "@/lib/preferences";
 import { type Mode, type PaletteId, useTheme } from "@/lib/theme";
 import { resolveQuery } from "@/lib/url";
-import { cn } from "@/lib/utils";
+import { cn, withViewTransition } from "@/lib/utils";
 
 // Tab strip + toolbar.
 const NAV_BARS_HEIGHT = 80;
 const TAB_STRIP_HEIGHT = 36;
 const BOOKMARK_BAR_HEIGHT = 32;
+// Thin strip reserved at the bottom of the top bar for the page-load
+// progress line. Always reserved so starting a load doesn't re-lay out
+// the native content webview.
+const PROGRESS_BAR_HEIGHT = 2;
+
+// Reserved for the profile dropdown so the active tab's webview doesn't
+// clip it. Matches w-80 card + outer padding.
+const PROFILE_STRIP_WIDTH = 336;
 
 // With `titleBarStyle: Overlay` on macOS, the traffic lights are drawn on top
 // of our custom top bar in the top-left. Pad so nothing lands under them.
@@ -91,7 +131,9 @@ function App() {
   const [showAiDrawer, setShowAiDrawer] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+  const [showNetwork, setShowNetwork] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+  const [loadingTabs, setLoadingTabs] = useState<Set<string>>(new Set());
   const { setPalette, setMode } = useTheme();
   const { startPage, searchEngine } = usePreferences();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -99,12 +141,17 @@ function App() {
 
   const activeTab = tabs.find((t) => t.id === activeId) ?? null;
   const hasActiveWebview = activeTab?.hasWebview ?? false;
-  const modalOpen = showSettings || showHistory;
+  const modalOpen = showSettings || showHistory || showNetwork;
   const showLanding = !modalOpen && (!activeTab || !activeTab.hasWebview);
   const showBookmarkBar = bookmarks.length > 0;
 
   const topBarHeight =
-    NAV_BARS_HEIGHT + (showBookmarkBar ? BOOKMARK_BAR_HEIGHT : 0);
+    NAV_BARS_HEIGHT +
+    (showBookmarkBar ? BOOKMARK_BAR_HEIGHT : 0) +
+    PROGRESS_BAR_HEIGHT;
+
+  const activeLoading =
+    activeId !== null && hasActiveWebview && loadingTabs.has(activeId);
 
   const activeBookmark = useMemo(() => {
     if (!activeTab || !activeTab.hasWebview) return null;
@@ -195,21 +242,23 @@ function App() {
   }, [setPalette, setMode]);
 
   // Resize + reposition content webview any time the window resizes, the
-  // top bar's height changes (bookmarks bar appearing), or the AI drawer
-  // toggles (narrows the content to make room).
+  // top bar's height changes (bookmarks bar appearing), the AI drawer
+  // toggles, or the profile dropdown opens (each reserves a right strip).
   useEffect(() => {
     const sync = () =>
       ipc
         .resizeContent(
           topBarHeight,
-          window.innerWidth - (showAiDrawer ? AI_DRAWER_WIDTH : 0),
+          window.innerWidth -
+            (showAiDrawer ? AI_DRAWER_WIDTH : 0) -
+            (profileMenuOpen ? PROFILE_STRIP_WIDTH : 0),
           window.innerHeight - topBarHeight,
         )
         .catch(() => {});
     window.addEventListener("resize", sync);
     sync();
     return () => window.removeEventListener("resize", sync);
-  }, [topBarHeight, showAiDrawer]);
+  }, [topBarHeight, showAiDrawer, profileMenuOpen]);
 
   // Full-screen modals hide all tabs; closing them reactivates the tab.
   useEffect(() => {
@@ -240,6 +289,24 @@ function App() {
       promise.then((off) => off());
     };
   }, [activeId]);
+
+  useEffect(() => {
+    const promise = listen<{ id: string; state: "started" | "finished" }>(
+      "tab-load-state",
+      (e) => {
+        const { id, state } = e.payload;
+        setLoadingTabs((prev) => {
+          const next = new Set(prev);
+          if (state === "started") next.add(id);
+          else next.delete(id);
+          return next;
+        });
+      },
+    );
+    return () => {
+      promise.then((off) => off());
+    };
+  }, []);
 
   const navigateTo = useCallback(
     async (url: string) => {
@@ -355,11 +422,50 @@ function App() {
     }
   }, [activeTab, activeBookmark]);
 
+  const toggleHistory = useCallback(() => {
+    withViewTransition(() => {
+      setShowSettings(false);
+      setShowNetwork(false);
+      setShowHistory((v) => !v);
+    });
+  }, []);
+
+  const toggleSettings = useCallback(() => {
+    withViewTransition(() => {
+      setShowHistory(false);
+      setShowNetwork(false);
+      setShowSettings((v) => !v);
+    });
+  }, []);
+
+  const toggleNetwork = useCallback(() => {
+    withViewTransition(() => {
+      setShowSettings(false);
+      setShowHistory(false);
+      setShowNetwork((v) => !v);
+    });
+  }, []);
+
+  const closeHistory = useCallback(() => {
+    withViewTransition(() => setShowHistory(false));
+  }, []);
+
+  const closeSettings = useCallback(() => {
+    withViewTransition(() => setShowSettings(false));
+  }, []);
+
+  const closeNetwork = useCallback(() => {
+    withViewTransition(() => setShowNetwork(false));
+  }, []);
+
   const closeAllOverlays = useCallback(() => {
-    setShowSettings(false);
-    setShowHistory(false);
-    setShowAiDrawer(false);
-    setProfileMenuOpen(false);
+    withViewTransition(() => {
+      setShowSettings(false);
+      setShowHistory(false);
+      setShowNetwork(false);
+      setShowAiDrawer(false);
+      setProfileMenuOpen(false);
+    });
   }, []);
 
   useEffect(() => {
@@ -368,7 +474,13 @@ function App() {
 
       // Panels and drawer have their own unmodified Esc behavior.
       if (e.key === "Escape") {
-        if (showSettings || showHistory || showAiDrawer || profileMenuOpen) {
+        if (
+          showSettings ||
+          showHistory ||
+          showNetwork ||
+          showAiDrawer ||
+          profileMenuOpen
+        ) {
           e.preventDefault();
           closeAllOverlays();
           return;
@@ -400,17 +512,21 @@ function App() {
           break;
         case "y":
           e.preventDefault();
-          setShowSettings(false);
-          setShowHistory((v) => !v);
+          toggleHistory();
           break;
         case ",":
           e.preventDefault();
-          setShowHistory(false);
-          setShowSettings((v) => !v);
+          toggleSettings();
           break;
         case "/":
           e.preventDefault();
           setShowAiDrawer((v) => !v);
+          break;
+        case "I":
+          if (e.shiftKey) {
+            e.preventDefault();
+            toggleNetwork();
+          }
           break;
         case "[":
           e.preventDefault();
@@ -429,8 +545,12 @@ function App() {
     openNewTab,
     closeTabById,
     toggleBookmark,
+    toggleHistory,
+    toggleSettings,
+    toggleNetwork,
     showSettings,
     showHistory,
+    showNetwork,
     showAiDrawer,
     profileMenuOpen,
     closeAllOverlays,
@@ -576,11 +696,18 @@ function App() {
           <Button
             variant="ghost"
             size="icon"
+            aria-label="Network"
+            title="Network · ⌘⇧I"
+            onClick={toggleNetwork}
+            className={cn(showNetwork && "bg-muted text-foreground")}
+          >
+            <Activity strokeWidth={1.5} />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
             aria-label="History"
-            onClick={() => {
-              setShowSettings(false);
-              setShowHistory((v) => !v);
-            }}
+            onClick={toggleHistory}
             className={cn(showHistory && "bg-muted text-foreground")}
           >
             <HistoryIcon strokeWidth={1.5} />
@@ -598,10 +725,7 @@ function App() {
             variant="ghost"
             size="icon"
             aria-label="Settings"
-            onClick={() => {
-              setShowHistory(false);
-              setShowSettings((v) => !v);
-            }}
+            onClick={toggleSettings}
             className={cn(showSettings && "bg-muted text-foreground")}
           >
             <SettingsIcon strokeWidth={1.5} />
@@ -610,6 +734,7 @@ function App() {
             variant="ghost"
             size="icon"
             aria-label="Profile"
+            data-profile-trigger
             onClick={() => {
               setShowSettings(false);
               setShowHistory(false);
@@ -665,6 +790,16 @@ function App() {
         </div>
       )}
 
+      {/* Thin progress strip. Always reserved so starting a load doesn't
+          re-lay out the native webview. Hidden via opacity when idle. */}
+      <div
+        data-tauri-drag-region
+        className="relative shrink-0 bg-muted/40"
+        style={{ height: PROGRESS_BAR_HEIGHT }}
+      >
+        <TopProgress active={activeLoading} />
+      </div>
+
       {/* Below the top bars: content area + AI drawer side-by-side.
           Content webview is positioned here by Tauri; React just manages
           landing/panels/drawer on top. */}
@@ -689,29 +824,34 @@ function App() {
               </div>
             </div>
           )}
-          {showSettings && (
-            <SettingsPanel onClose={() => setShowSettings(false)} />
-          )}
-          {showHistory && (
-            <HistoryPanel
-              onClose={() => setShowHistory(false)}
-              onOpenUrl={(url) => {
-                setShowHistory(false);
-                navigateTo(url);
-              }}
-            />
-          )}
-          {profileMenuOpen && (
-            <ProfileMenu
-              onClose={() => setProfileMenuOpen(false)}
-              onOpenSettings={() => {
-                setProfileMenuOpen(false);
-                setShowSettings(true);
-              }}
-            />
-          )}
+          <Suspense fallback={null}>
+            {showSettings && <SettingsPanel onClose={closeSettings} />}
+            {showHistory && (
+              <HistoryPanel
+                onClose={closeHistory}
+                onOpenUrl={(url) => {
+                  withViewTransition(() => setShowHistory(false));
+                  navigateTo(url);
+                }}
+              />
+            )}
+            {showNetwork && <NetworkInspector onClose={closeNetwork} />}
+            {profileMenuOpen && (
+              <ProfileMenu
+                onClose={() => setProfileMenuOpen(false)}
+                onOpenSettings={() => {
+                  withViewTransition(() => {
+                    setProfileMenuOpen(false);
+                    setShowSettings(true);
+                  });
+                }}
+              />
+            )}
+          </Suspense>
         </div>
-        {showAiDrawer && <AIDrawer onClose={() => setShowAiDrawer(false)} />}
+        <Suspense fallback={null}>
+          {showAiDrawer && <AIDrawer onClose={() => setShowAiDrawer(false)} />}
+        </Suspense>
       </div>
     </div>
   );

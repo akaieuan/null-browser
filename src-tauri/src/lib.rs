@@ -17,6 +17,7 @@ pub fn run() {
         .setup(|app| {
             dock::set_icon();
             app.manage(storage::Storage::open());
+            app.manage(network::NetworkState::default());
             let menu = menu::build(app.handle())?;
             app.set_menu(menu)?;
             app.on_menu_event(|app_handle, event| {
@@ -35,6 +36,7 @@ pub fn run() {
             commands::tabs::go_back,
             commands::tabs::go_forward,
             commands::tabs::reload,
+            commands::tabs::clear_tab_storage,
             commands::bookmarks::list_bookmarks,
             commands::bookmarks::add_bookmark,
             commands::bookmarks::remove_bookmark,
@@ -44,6 +46,10 @@ pub fn run() {
             commands::history::add_history,
             commands::history::remove_history,
             commands::history::clear_history,
+            commands::network::list_network_events,
+            commands::network::clear_network_events,
+            commands::network::set_network_paused,
+            commands::network::network_is_paused,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -14,12 +14,17 @@ use tauri::{
     PhysicalSize, Url, WebviewBuilder, WebviewUrl,
 };
 
+use crate::network;
+
 /// Prefix used for all tab webview labels. Keeps them separable from
 /// the `main` webview in the `app.webviews()` map.
 const TAB_PREFIX: &str = "tab-";
 
 /// Event name the content webview emits to the UI when a tab's URL changes.
 pub const TAB_UPDATED: &str = "tab-updated";
+
+/// Event name for load start/finish, used to drive the top progress bar.
+pub const TAB_LOAD_STATE: &str = "tab-load-state";
 
 fn s<E: std::fmt::Display>(e: E) -> String {
     e.to_string()
@@ -44,18 +49,33 @@ pub fn create_tab(app: &AppHandle, tab_id: &str, url: &str, top: f64) -> Result<
     let top_px = (top.max(0.0) * scale).round() as u32;
 
     let emit_id = tab_id.to_string();
-    let builder = WebviewBuilder::new(&label, WebviewUrl::External(url)).on_page_load(
-        move |webview, payload| {
+    let nav_id = tab_id.to_string();
+    let nav_app = app.clone();
+    let builder = WebviewBuilder::new(&label, WebviewUrl::External(url))
+        .on_navigation(move |url| {
+            network::record_navigation(&nav_app, &nav_id, url);
+            true
+        })
+        .on_page_load(move |webview, payload| {
+            let url_string = payload.url().to_string();
+            let app = webview.app_handle();
+            let state = match payload.event() {
+                PageLoadEvent::Started => "started",
+                PageLoadEvent::Finished => "finished",
+            };
+            let _ = app.emit_to(
+                EventTarget::webview("main"),
+                TAB_LOAD_STATE,
+                serde_json::json!({ "id": &emit_id, "state": state, "url": &url_string }),
+            );
             if matches!(payload.event(), PageLoadEvent::Finished) {
-                let url_string = payload.url().to_string();
-                let _ = webview.app_handle().emit_to(
+                let _ = app.emit_to(
                     EventTarget::webview("main"),
                     TAB_UPDATED,
-                    serde_json::json!({ "id": emit_id, "url": url_string }),
+                    serde_json::json!({ "id": &emit_id, "url": &url_string }),
                 );
             }
-        },
-    );
+        });
 
     window
         .add_child(
@@ -157,4 +177,47 @@ pub fn go_forward(app: &AppHandle, tab_id: &str) -> Result<(), String> {
 
 pub fn reload(app: &AppHandle, tab_id: &str) -> Result<(), String> {
     eval_on(app, tab_id, "location.reload()")
+}
+
+/// Wipe per-origin storage on every live tab (cookies, localStorage,
+/// sessionStorage, IndexedDB). Runs as a page script, so it clears only
+/// what JS can see for the current document's origin — not the OS-level
+/// network cache. Good enough to log the user out of most sites.
+pub fn clear_tab_storage(app: &AppHandle) -> Result<(), String> {
+    const SCRIPT: &str = r#"
+        try { localStorage.clear(); } catch (e) {}
+        try { sessionStorage.clear(); } catch (e) {}
+        try {
+            document.cookie.split(';').forEach(function (c) {
+                var eq = c.indexOf('=');
+                var name = (eq > -1 ? c.substr(0, eq) : c).trim();
+                if (!name) return;
+                var host = location.hostname;
+                var paths = ['/', location.pathname];
+                var domains = ['', host, '.' + host];
+                paths.forEach(function (p) {
+                    domains.forEach(function (d) {
+                        var base = name + '=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=' + p;
+                        document.cookie = d ? base + ';domain=' + d : base;
+                    });
+                });
+            });
+        } catch (e) {}
+        try {
+            if (indexedDB.databases) {
+                indexedDB.databases().then(function (dbs) {
+                    dbs.forEach(function (d) {
+                        if (d && d.name) indexedDB.deleteDatabase(d.name);
+                    });
+                });
+            }
+        } catch (e) {}
+    "#;
+    for (label, webview) in app.webviews() {
+        if !label.starts_with(TAB_PREFIX) {
+            continue;
+        }
+        webview.eval(SCRIPT).map_err(s)?;
+    }
+    Ok(())
 }
