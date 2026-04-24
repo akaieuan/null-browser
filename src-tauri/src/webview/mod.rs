@@ -26,6 +26,12 @@ pub const TAB_UPDATED: &str = "tab-updated";
 /// Event name for load start/finish, used to drive the top progress bar.
 pub const TAB_LOAD_STATE: &str = "tab-load-state";
 
+/// User-Agent string Null sends. macOS WKWebView's default UA makes Google
+/// and a handful of other sites surface 'browser not supported' nags; this
+/// pins us to a current Safari UA so we blend in with the largest macOS
+/// browser crowd (lowest fingerprint entropy too).
+const USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Safari/605.1.15";
+
 fn s<E: std::fmt::Display>(e: E) -> String {
     e.to_string()
 }
@@ -52,6 +58,7 @@ pub fn create_tab(app: &AppHandle, tab_id: &str, url: &str, top: f64) -> Result<
     let nav_id = tab_id.to_string();
     let nav_app = app.clone();
     let builder = WebviewBuilder::new(&label, WebviewUrl::External(url))
+        .user_agent(USER_AGENT)
         .on_navigation(move |url| {
             network::record_navigation(&nav_app, &nav_id, url);
             true

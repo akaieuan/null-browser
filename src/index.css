@@ -246,44 +246,8 @@ body {
   }
 }
 
-/* View Transitions: cross-fade the content pane when panels open/close.
-   Only applied where we wrap mutations in document.startViewTransition. */
-::view-transition-old(panel),
-::view-transition-new(panel) {
-  animation-duration: 180ms;
-  animation-timing-function: cubic-bezier(0.2, 0, 0, 1);
-}
-::view-transition-old(panel) {
-  animation-name: np-fade-out;
-}
-::view-transition-new(panel) {
-  animation-name: np-fade-in;
-}
-@keyframes np-fade-in {
-  from {
-    opacity: 0;
-    transform: translateY(4px);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
-}
-@keyframes np-fade-out {
-  from {
-    opacity: 1;
-  }
-  to {
-    opacity: 0;
-  }
-}
-
-/* Reduced-motion: fall back to a pure opacity crossfade, no translate. */
+/* Reduced-motion: skip the asymptotic progress animation. */
 @media (prefers-reduced-motion: reduce) {
-  ::view-transition-old(panel),
-  ::view-transition-new(panel) {
-    animation-duration: 1ms;
-  }
   .animate-\[np-progress_8s_ease-out_forwards\] {
     animation: none;
     width: 90%;

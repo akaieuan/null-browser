@@ -1,12 +1,4 @@
-import {
-  lazy,
-  Suspense,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
@@ -43,38 +35,18 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 
 import { Button } from "@/components/ui/button";
+import { AIDrawer } from "@/components/panels/AIDrawer";
+import { HistoryPanel } from "@/components/panels/HistoryPanel";
+import { NetworkInspector } from "@/components/panels/NetworkInspector";
+import { ProfileMenu } from "@/components/panels/ProfileMenu";
+import { SettingsPanel } from "@/components/panels/SettingsPanel";
 import { TopProgress } from "@/components/TopProgress";
 import { ipc, type Bookmark } from "@/lib/ipc";
 import { AI_DRAWER_WIDTH } from "@/lib/layout";
-
-// Heavy panels — loaded on first open, not on app start.
-const AIDrawer = lazy(() =>
-  import("@/components/panels/AIDrawer").then((m) => ({ default: m.AIDrawer })),
-);
-const HistoryPanel = lazy(() =>
-  import("@/components/panels/HistoryPanel").then((m) => ({
-    default: m.HistoryPanel,
-  })),
-);
-const NetworkInspector = lazy(() =>
-  import("@/components/panels/NetworkInspector").then((m) => ({
-    default: m.NetworkInspector,
-  })),
-);
-const ProfileMenu = lazy(() =>
-  import("@/components/panels/ProfileMenu").then((m) => ({
-    default: m.ProfileMenu,
-  })),
-);
-const SettingsPanel = lazy(() =>
-  import("@/components/panels/SettingsPanel").then((m) => ({
-    default: m.SettingsPanel,
-  })),
-);
 import { usePreferences, resolveStartUrl } from "@/lib/preferences";
 import { type Mode, type PaletteId, useTheme } from "@/lib/theme";
 import { resolveQuery } from "@/lib/url";
-import { cn, withViewTransition } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 
 // Tab strip + toolbar.
 const NAV_BARS_HEIGHT = 80;
@@ -423,49 +395,33 @@ function App() {
   }, [activeTab, activeBookmark]);
 
   const toggleHistory = useCallback(() => {
-    withViewTransition(() => {
-      setShowSettings(false);
-      setShowNetwork(false);
-      setShowHistory((v) => !v);
-    });
+    setShowSettings(false);
+    setShowNetwork(false);
+    setShowHistory((v) => !v);
   }, []);
 
   const toggleSettings = useCallback(() => {
-    withViewTransition(() => {
-      setShowHistory(false);
-      setShowNetwork(false);
-      setShowSettings((v) => !v);
-    });
+    setShowHistory(false);
+    setShowNetwork(false);
+    setShowSettings((v) => !v);
   }, []);
 
   const toggleNetwork = useCallback(() => {
-    withViewTransition(() => {
-      setShowSettings(false);
-      setShowHistory(false);
-      setShowNetwork((v) => !v);
-    });
+    setShowSettings(false);
+    setShowHistory(false);
+    setShowNetwork((v) => !v);
   }, []);
 
-  const closeHistory = useCallback(() => {
-    withViewTransition(() => setShowHistory(false));
-  }, []);
-
-  const closeSettings = useCallback(() => {
-    withViewTransition(() => setShowSettings(false));
-  }, []);
-
-  const closeNetwork = useCallback(() => {
-    withViewTransition(() => setShowNetwork(false));
-  }, []);
+  const closeHistory = useCallback(() => setShowHistory(false), []);
+  const closeSettings = useCallback(() => setShowSettings(false), []);
+  const closeNetwork = useCallback(() => setShowNetwork(false), []);
 
   const closeAllOverlays = useCallback(() => {
-    withViewTransition(() => {
-      setShowSettings(false);
-      setShowHistory(false);
-      setShowNetwork(false);
-      setShowAiDrawer(false);
-      setProfileMenuOpen(false);
-    });
+    setShowSettings(false);
+    setShowHistory(false);
+    setShowNetwork(false);
+    setShowAiDrawer(false);
+    setProfileMenuOpen(false);
   }, []);
 
   useEffect(() => {
@@ -594,16 +550,17 @@ function App() {
               onClose={() => closeTabById(tab.id)}
             />
           ))}
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="New Tab"
+            onClick={() => openNewTab()}
+            data-tauri-drag-region="false"
+            className="mb-1 shrink-0"
+          >
+            <Plus strokeWidth={1.5} />
+          </Button>
         </div>
-        <Button
-          variant="ghost"
-          size="icon"
-          aria-label="New Tab"
-          onClick={() => openNewTab()}
-          className="mb-1 ml-1"
-        >
-          <Plus strokeWidth={1.5} />
-        </Button>
       </div>
 
       {/* Row 2: toolbar */}
@@ -824,34 +781,28 @@ function App() {
               </div>
             </div>
           )}
-          <Suspense fallback={null}>
-            {showSettings && <SettingsPanel onClose={closeSettings} />}
-            {showHistory && (
-              <HistoryPanel
-                onClose={closeHistory}
-                onOpenUrl={(url) => {
-                  withViewTransition(() => setShowHistory(false));
-                  navigateTo(url);
-                }}
-              />
-            )}
-            {showNetwork && <NetworkInspector onClose={closeNetwork} />}
-            {profileMenuOpen && (
-              <ProfileMenu
-                onClose={() => setProfileMenuOpen(false)}
-                onOpenSettings={() => {
-                  withViewTransition(() => {
-                    setProfileMenuOpen(false);
-                    setShowSettings(true);
-                  });
-                }}
-              />
-            )}
-          </Suspense>
+          {showSettings && <SettingsPanel onClose={closeSettings} />}
+          {showHistory && (
+            <HistoryPanel
+              onClose={closeHistory}
+              onOpenUrl={(url) => {
+                setShowHistory(false);
+                navigateTo(url);
+              }}
+            />
+          )}
+          {showNetwork && <NetworkInspector onClose={closeNetwork} />}
+          {profileMenuOpen && (
+            <ProfileMenu
+              onClose={() => setProfileMenuOpen(false)}
+              onOpenSettings={() => {
+                setProfileMenuOpen(false);
+                setShowSettings(true);
+              }}
+            />
+          )}
         </div>
-        <Suspense fallback={null}>
-          {showAiDrawer && <AIDrawer onClose={() => setShowAiDrawer(false)} />}
-        </Suspense>
+        {showAiDrawer && <AIDrawer onClose={() => setShowAiDrawer(false)} />}
       </div>
     </div>
   );

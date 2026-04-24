@@ -42,7 +42,7 @@ export function HistoryPanel({
   return (
     <div
       className="absolute inset-0 z-40 flex flex-col overflow-hidden bg-background text-foreground"
-      style={{ viewTransitionName: "panel", contain: "layout paint style" }}
+      style={{ contain: "layout paint style" }}
     >
       <PanelHeader title="History" onClose={onClose} />
 
