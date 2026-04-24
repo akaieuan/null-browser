@@ -4,7 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Status
 
-Pre-v0.1. Milestone 0 of [the plan](/Users/ieuanking/.claude/plans/here-is-a-plan-quiet-spark.md) is in progress. The repo is scaffolded with Tauri 2.0 + Vite + React + TypeScript. Bundle identifier `sh.null.browser`, Cargo package `null`, lib `null_lib`. Build matrix targets macOS, Linux, Windows.
+Pre-v0.1. M0 → M4 shipped: scaffolding, browsing basics (tabs, nav, URL bar, bookmarks, history), themes + profile menu, top-bar action cluster, Network Inspector (main-frame + subresource capture, per-origin blocking), BYO-AI providers (Anthropic via OS keychain), and the AI drawer (chat / summarize / search / save artifacts). In progress: **M2 Phase 3** — native subresource blocking via `WKContentRuleList` + `WKScriptMessageHandler`; and **M5** — Ollama wired as the default for chat/summarize, conversation history, Brave Search as alt provider. See `README.md` for the full milestone table.
+
+Stack: Tauri 2.0 + Vite + React + TypeScript. Bundle identifier `sh.null.browser`, Cargo package `null`, lib `null_lib`. Build matrix targets macOS, Linux, Windows (macOS is the primary target today).
 
 ## Commands
 
