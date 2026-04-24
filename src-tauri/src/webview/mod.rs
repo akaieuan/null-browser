@@ -32,6 +32,46 @@ pub const TAB_LOAD_STATE: &str = "tab-load-state";
 /// browser crowd (lowest fingerprint entropy too).
 const USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Safari/605.1.15";
 
+/// Script injected into every tab at page load. Observes PerformanceResource
+/// entries (the browser's own list of every subresource it fetched — scripts,
+/// fonts, images, CSS, XHR, fetch) and pings them back to Rust via a custom
+/// URI scheme. Best-effort: sites with a strict `img-src` CSP will block
+/// our beacon, so their subresources stay invisible until Phase 3
+/// (native message handler via WKScriptMessageHandler).
+const OBSERVER_SCRIPT: &str = r#"
+(function(){
+  if (window.__nullObserver__) return;
+  window.__nullObserver__ = true;
+  function emit(data) {
+    try {
+      var img = new Image();
+      img.src = 'null-event://log?d=' + encodeURIComponent(JSON.stringify(data));
+    } catch (e) {}
+  }
+  try {
+    var obs = new PerformanceObserver(function(list) {
+      var entries = list.getEntries();
+      for (var i = 0; i < entries.length; i++) {
+        var e = entries[i];
+        if (!e.name) continue;
+        if (e.name.indexOf('null-event:') === 0) continue;
+        emit({ url: e.name, init: e.initiatorType || 'resource' });
+      }
+    });
+    obs.observe({ entryTypes: ['resource'] });
+    // Replay anything that fired before the observer attached.
+    try {
+      var existing = performance.getEntriesByType('resource');
+      for (var j = 0; j < existing.length; j++) {
+        var e = existing[j];
+        if (!e.name || e.name.indexOf('null-event:') === 0) continue;
+        emit({ url: e.name, init: e.initiatorType || 'resource' });
+      }
+    } catch (e) {}
+  } catch (e) {}
+})();
+"#;
+
 fn s<E: std::fmt::Display>(e: E) -> String {
     e.to_string()
 }
@@ -59,6 +99,7 @@ pub fn create_tab(app: &AppHandle, tab_id: &str, url: &str, top: f64) -> Result<
     let nav_app = app.clone();
     let builder = WebviewBuilder::new(&label, WebviewUrl::External(url))
         .user_agent(USER_AGENT)
+        .initialization_script(OBSERVER_SCRIPT)
         .on_navigation(move |url| network::record_navigation(&nav_app, &nav_id, url))
         .on_page_load(move |webview, payload| {
             let url_string = payload.url().to_string();

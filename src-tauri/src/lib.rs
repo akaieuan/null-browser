@@ -1,4 +1,4 @@
-use tauri::Manager;
+use tauri::{http, Manager, Url};
 
 pub mod ai;
 pub mod commands;
@@ -14,6 +14,34 @@ pub mod webview;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .register_uri_scheme_protocol("null-event", |ctx, request| {
+            // Beacon endpoint for the injected subresource observer. The
+            // full URL is null-event://log?d=<urlencoded-json>. Parse the
+            // d param and record the event; return 200 with open CORS so
+            // the injected fetch/Image isn't rejected by the page.
+            let uri_str = request.uri().to_string();
+            if let Ok(parsed) = Url::parse(&uri_str) {
+                for (k, v) in parsed.query_pairs() {
+                    if k == "d" {
+                        if let Ok(record) =
+                            serde_json::from_str::<network::SubresourceRecord>(&v)
+                        {
+                            network::record_subresource(
+                                ctx.app_handle(),
+                                &record.url,
+                                &record.initiator,
+                            );
+                        }
+                    }
+                }
+            }
+            http::Response::builder()
+                .status(200)
+                .header("Access-Control-Allow-Origin", "*")
+                .header("Cache-Control", "no-store")
+                .body(Vec::<u8>::new())
+                .unwrap()
+        })
         .setup(|app| {
             dock::set_icon();
             app.manage(storage::Storage::open());

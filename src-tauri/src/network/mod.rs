@@ -116,6 +116,52 @@ fn now_secs() -> i64 {
         .unwrap_or(0)
 }
 
+/// JS payload we ship back from the injected observer script. The `kind`
+/// is the PerformanceEntry's initiatorType (script/css/xmlhttprequest/
+/// fetch/img/link/…).
+#[derive(Debug, Deserialize)]
+pub struct SubresourceRecord {
+    pub url: String,
+    #[serde(rename = "init")]
+    pub initiator: String,
+}
+
+/// Capture a subresource request — scripts, fonts, images, XHRs, fetches.
+/// Called from the custom URI scheme handler when the injected
+/// PerformanceObserver fires. Best-effort: sites with strict `img-src` CSP
+/// may block our callback, which means their subresources stay invisible
+/// until Phase 3 (native message handler).
+pub fn record_subresource(app: &AppHandle, url_str: &str, initiator: &str) {
+    // Skip our own scheme + non-web schemes (data:, blob:, chrome:, about:).
+    if !(url_str.starts_with("https://") || url_str.starts_with("http://")) {
+        return;
+    }
+    let Ok(url) = Url::parse(url_str) else {
+        return;
+    };
+    let origin = origin_of(&url);
+    let blocked = app
+        .try_state::<Storage>()
+        .and_then(|s| s.is_origin_blocked(&origin).ok())
+        .unwrap_or(false);
+
+    let event = NetworkEvent {
+        id: 0,
+        tab_id: None,
+        url: url_str.to_string(),
+        origin,
+        kind: initiator.to_string(),
+        blocked,
+        at: now_secs(),
+    };
+
+    if let Some(state) = app.try_state::<NetworkState>() {
+        if let Some(recorded) = state.record(event) {
+            let _ = app.emit_to(EventTarget::webview("main"), NETWORK_EVENT, &recorded);
+        }
+    }
+}
+
 /// Capture a main-frame navigation for the inspector and broadcast it to
 /// the main webview. Returns `true` if the navigation should proceed,
 /// `false` if it hit a blocked origin and should be cancelled.
