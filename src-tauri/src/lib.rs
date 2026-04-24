@@ -23,9 +23,7 @@ pub fn run() {
             if let Ok(parsed) = Url::parse(&uri_str) {
                 for (k, v) in parsed.query_pairs() {
                     if k == "d" {
-                        if let Ok(record) =
-                            serde_json::from_str::<network::SubresourceRecord>(&v)
-                        {
+                        if let Ok(record) = serde_json::from_str::<network::SubresourceRecord>(&v) {
                             network::record_subresource(
                                 ctx.app_handle(),
                                 &record.url,
