@@ -59,10 +59,7 @@ pub fn create_tab(app: &AppHandle, tab_id: &str, url: &str, top: f64) -> Result<
     let nav_app = app.clone();
     let builder = WebviewBuilder::new(&label, WebviewUrl::External(url))
         .user_agent(USER_AGENT)
-        .on_navigation(move |url| {
-            network::record_navigation(&nav_app, &nav_id, url);
-            true
-        })
+        .on_navigation(move |url| network::record_navigation(&nav_app, &nav_id, url))
         .on_page_load(move |webview, payload| {
             let url_string = payload.url().to_string();
             let app = webview.app_handle();

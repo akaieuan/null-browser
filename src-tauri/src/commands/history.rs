@@ -18,11 +18,7 @@ pub fn list_history(
 }
 
 #[tauri::command]
-pub fn add_history(
-    storage: State<Storage>,
-    url: String,
-    title: String,
-) -> Result<(), String> {
+pub fn add_history(storage: State<Storage>, url: String, title: String) -> Result<(), String> {
     storage.add_history(&url, &title).map_err(|e| e.to_string())
 }
 

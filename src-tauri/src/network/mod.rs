@@ -18,6 +18,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, EventTarget, Manager, Url};
 
+use crate::storage::Storage;
+
 /// Most recent events kept in memory. Older ones are dropped. Intentionally
 /// modest — the inspector is for 'what's happening now', not forensics.
 const MAX_EVENTS: usize = 2000;
@@ -33,6 +35,8 @@ pub struct NetworkEvent {
     pub origin: String,
     /// "navigation" today; "resource", "fetch", "xhr", etc. in later phases.
     pub kind: String,
+    /// True if this request was prevented by the user's blocklist.
+    pub blocked: bool,
     /// Unix epoch seconds.
     pub at: i64,
 }
@@ -113,23 +117,34 @@ fn now_secs() -> i64 {
 }
 
 /// Capture a main-frame navigation for the inspector and broadcast it to
-/// the main webview. Called from `WebviewBuilder::on_navigation` for every
-/// tab. Cheap and fallible by design — if state is missing (shouldn't
-/// happen) or the broadcast fails, the navigation itself still proceeds.
-pub fn record_navigation(app: &AppHandle, tab_id: &str, url: &Url) {
+/// the main webview. Returns `true` if the navigation should proceed,
+/// `false` if it hit a blocked origin and should be cancelled.
+///
+/// Called from `WebviewBuilder::on_navigation` for every tab. Cheap and
+/// fallible by design — if state is missing or the broadcast fails, the
+/// navigation itself still proceeds.
+pub fn record_navigation(app: &AppHandle, tab_id: &str, url: &Url) -> bool {
+    let origin = origin_of(url);
+    let blocked = app
+        .try_state::<Storage>()
+        .and_then(|s| s.is_origin_blocked(&origin).ok())
+        .unwrap_or(false);
+
     let event = NetworkEvent {
         id: 0,
         tab_id: Some(tab_id.to_string()),
         url: url.to_string(),
-        origin: origin_of(url),
+        origin,
         kind: "navigation".to_string(),
+        blocked,
         at: now_secs(),
     };
-    let Some(state) = app.try_state::<NetworkState>() else {
-        return;
-    };
-    let Some(recorded) = state.record(event) else {
-        return;
-    };
-    let _ = app.emit_to(EventTarget::webview("main"), NETWORK_EVENT, &recorded);
+
+    if let Some(state) = app.try_state::<NetworkState>() {
+        if let Some(recorded) = state.record(event) {
+            let _ = app.emit_to(EventTarget::webview("main"), NETWORK_EVENT, &recorded);
+        }
+    }
+
+    !blocked
 }

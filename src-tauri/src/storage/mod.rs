@@ -32,6 +32,13 @@ pub struct HistoryEntry {
     pub visited_at: i64,
 }
 
+/// An origin (scheme://host[:port]) the user has chosen to block.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlockedOrigin {
+    pub origin: String,
+    pub created_at: i64,
+}
+
 /// Owned handle to the single SQLite connection used by the app.
 ///
 /// Managed via Tauri state so command handlers can acquire it with
@@ -161,6 +168,54 @@ impl Storage {
         let conn = self.conn();
         conn.execute("DELETE FROM history", [])?;
         Ok(())
+    }
+
+    pub fn add_blocked_origin(&self, origin: &str) -> rusqlite::Result<BlockedOrigin> {
+        let conn = self.conn();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        conn.execute(
+            "INSERT OR IGNORE INTO blocked_origins (origin, created_at) VALUES (?1, ?2)",
+            params![origin, now],
+        )?;
+        Ok(BlockedOrigin {
+            origin: origin.to_string(),
+            created_at: now,
+        })
+    }
+
+    pub fn remove_blocked_origin(&self, origin: &str) -> rusqlite::Result<()> {
+        let conn = self.conn();
+        conn.execute(
+            "DELETE FROM blocked_origins WHERE origin = ?1",
+            params![origin],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_blocked_origins(&self) -> rusqlite::Result<Vec<BlockedOrigin>> {
+        let conn = self.conn();
+        let mut stmt = conn
+            .prepare("SELECT origin, created_at FROM blocked_origins ORDER BY created_at DESC")?;
+        let rows = stmt.query_map([], |row| {
+            Ok(BlockedOrigin {
+                origin: row.get(0)?,
+                created_at: row.get(1)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    pub fn is_origin_blocked(&self, origin: &str) -> rusqlite::Result<bool> {
+        let conn = self.conn();
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM blocked_origins WHERE origin = ?1",
+            params![origin],
+            |row| row.get(0),
+        )?;
+        Ok(count > 0)
     }
 }
 

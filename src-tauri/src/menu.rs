@@ -57,15 +57,10 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     let m_light = MenuItem::with_id(app, "mode:light", "Light", true, None::<&str>)?;
     let m_dark = MenuItem::with_id(app, "mode:dark", "Dark", true, None::<&str>)?;
 
-    let appearance_submenu =
-        Submenu::with_items(app, "Appearance", true, &[&m_light, &m_dark])?;
+    let appearance_submenu = Submenu::with_items(app, "Appearance", true, &[&m_light, &m_dark])?;
 
-    let view_submenu = Submenu::with_items(
-        app,
-        "View",
-        true,
-        &[&theme_submenu, &appearance_submenu],
-    )?;
+    let view_submenu =
+        Submenu::with_items(app, "View", true, &[&theme_submenu, &appearance_submenu])?;
 
     let window_submenu = Submenu::with_items(
         app,

@@ -50,6 +50,9 @@ pub fn run() {
             commands::network::clear_network_events,
             commands::network::set_network_paused,
             commands::network::network_is_paused,
+            commands::network::block_origin,
+            commands::network::unblock_origin,
+            commands::network::list_blocked_origins,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

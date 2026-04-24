@@ -7,7 +7,7 @@
 
 use rusqlite::Connection;
 
-const LATEST: i64 = 2;
+const LATEST: i64 = 3;
 
 pub fn run(conn: &mut Connection) -> rusqlite::Result<()> {
     let current: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
@@ -15,6 +15,7 @@ pub fn run(conn: &mut Connection) -> rusqlite::Result<()> {
         let sql = match version {
             1 => MIGRATION_001,
             2 => MIGRATION_002,
+            3 => MIGRATION_003,
             _ => unreachable!("no migration defined for version {version}"),
         };
         let tx = conn.transaction()?;
@@ -60,4 +61,11 @@ const MIGRATION_002: &str = r#"
     );
 
     CREATE INDEX bookmarks_position_idx ON bookmarks (position);
+"#;
+
+const MIGRATION_003: &str = r#"
+    CREATE TABLE blocked_origins (
+        origin     TEXT    PRIMARY KEY,
+        created_at INTEGER NOT NULL
+    );
 "#;

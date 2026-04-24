@@ -20,7 +20,13 @@ export type NetworkEvent = {
   url: string;
   origin: string;
   kind: string;
+  blocked: boolean;
   at: number;
+};
+
+export type BlockedOrigin = {
+  origin: string;
+  created_at: number;
 };
 
 export const ipc = {
@@ -63,4 +69,11 @@ export const ipc = {
   setNetworkPaused: (paused: boolean) =>
     invoke<void>("set_network_paused", { paused }),
   networkIsPaused: () => invoke<boolean>("network_is_paused"),
+
+  blockOrigin: (origin: string) =>
+    invoke<BlockedOrigin>("block_origin", { origin }),
+  unblockOrigin: (origin: string) =>
+    invoke<void>("unblock_origin", { origin }),
+  listBlockedOrigins: () =>
+    invoke<BlockedOrigin[]>("list_blocked_origins"),
 };

@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { ChevronDown, ChevronRight, Pause, Play, Trash2 } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronRight,
+  Pause,
+  Play,
+  Shield,
+  ShieldOff,
+  Trash2,
+} from "lucide-react";
 
 import { PanelHeader } from "@/components/panels/PanelHeader";
 import { ipc, type NetworkEvent } from "@/lib/ipc";
@@ -8,12 +16,17 @@ import { cn } from "@/lib/utils";
 
 export function NetworkInspector({ onClose }: { onClose: () => void }) {
   const [events, setEvents] = useState<NetworkEvent[]>([]);
+  const [blocked, setBlocked] = useState<Set<string>>(new Set());
   const [paused, setPausedState] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
   const refresh = useCallback(() => {
     ipc.listNetworkEvents().then(setEvents).catch(() => {});
     ipc.networkIsPaused().then(setPausedState).catch(() => {});
+    ipc
+      .listBlockedOrigins()
+      .then((rows) => setBlocked(new Set(rows.map((b) => b.origin))))
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -40,6 +53,20 @@ export function NetworkInspector({ onClose }: { onClose: () => void }) {
     setEvents([]);
   }
 
+  async function toggleBlocked(origin: string) {
+    if (blocked.has(origin)) {
+      await ipc.unblockOrigin(origin).catch(() => {});
+      setBlocked((prev) => {
+        const next = new Set(prev);
+        next.delete(origin);
+        return next;
+      });
+    } else {
+      await ipc.blockOrigin(origin).catch(() => {});
+      setBlocked((prev) => new Set(prev).add(origin));
+    }
+  }
+
   function toggleExpand(origin: string) {
     setExpanded((prev) => {
       const next = new Set(prev);
@@ -58,7 +85,7 @@ export function NetworkInspector({ onClose }: { onClose: () => void }) {
       <main className="flex-1 overflow-y-auto">
         <div className="mx-auto max-w-2xl px-8 py-8">
           {events.length === 0 ? (
-            <EmptyState paused={paused} />
+            <EmptyState paused={paused} blockedCount={blocked.size} />
           ) : (
             <>
               <div className="mb-6 flex items-center justify-between text-xs">
@@ -66,13 +93,18 @@ export function NetworkInspector({ onClose }: { onClose: () => void }) {
                   <span
                     className={cn(
                       "flex h-1.5 w-1.5 rounded-full",
-                      paused ? "bg-muted-foreground" : "bg-foreground animate-pulse",
+                      paused
+                        ? "bg-muted-foreground"
+                        : "bg-foreground animate-pulse",
                     )}
                   />
                   <span className="text-muted-foreground">
-                    {events.length} {events.length === 1 ? "request" : "requests"}
-                    {" · "}
-                    {groups.length} {groups.length === 1 ? "origin" : "origins"}
+                    {events.length}{" "}
+                    {events.length === 1 ? "request" : "requests"} ·{" "}
+                    {groups.length}{" "}
+                    {groups.length === 1 ? "origin" : "origins"}
+                    {blocked.size > 0 &&
+                      ` · ${blocked.size} blocked`}
                   </span>
                 </div>
                 <div className="flex items-center gap-1">
@@ -103,7 +135,9 @@ export function NetworkInspector({ onClose }: { onClose: () => void }) {
                     origin={origin}
                     events={rows}
                     expanded={expanded.has(origin)}
+                    blocked={blocked.has(origin)}
                     onToggle={() => toggleExpand(origin)}
+                    onToggleBlock={() => toggleBlocked(origin)}
                   />
                 ))}
               </div>
@@ -119,34 +153,75 @@ function OriginGroup({
   origin,
   events,
   expanded,
+  blocked,
   onToggle,
+  onToggleBlock,
 }: {
   origin: string;
   events: NetworkEvent[];
   expanded: boolean;
+  blocked: boolean;
   onToggle: () => void;
+  onToggleBlock: () => void;
 }) {
   const last = events[events.length - 1];
   return (
     <section className="border-b border-border">
-      <button
-        type="button"
-        onClick={onToggle}
-        className="flex w-full items-center gap-3 py-3 text-left hover:bg-muted/30"
-      >
-        {expanded ? (
-          <ChevronDown size={12} strokeWidth={1.5} className="text-muted-foreground" />
-        ) : (
-          <ChevronRight size={12} strokeWidth={1.5} className="text-muted-foreground" />
-        )}
-        <span className="flex-1 truncate text-sm text-foreground">{origin}</span>
-        <span className="text-xs tabular-nums text-muted-foreground">
-          {events.length}
-        </span>
-        <span className="shrink-0 text-xs tabular-nums text-subtle">
-          {formatTime(last.at)}
-        </span>
-      </button>
+      <div className="group flex items-center gap-2 py-3 hover:bg-muted/30">
+        <button
+          type="button"
+          onClick={onToggle}
+          className="flex min-w-0 flex-1 items-center gap-3 text-left"
+        >
+          {expanded ? (
+            <ChevronDown
+              size={12}
+              strokeWidth={1.5}
+              className="shrink-0 text-muted-foreground"
+            />
+          ) : (
+            <ChevronRight
+              size={12}
+              strokeWidth={1.5}
+              className="shrink-0 text-muted-foreground"
+            />
+          )}
+          <span
+            className={cn(
+              "flex-1 truncate text-sm",
+              blocked
+                ? "text-muted-foreground line-through"
+                : "text-foreground",
+            )}
+          >
+            {origin}
+          </span>
+          <span className="text-xs tabular-nums text-muted-foreground">
+            {events.length}
+          </span>
+          <span className="shrink-0 text-xs tabular-nums text-subtle">
+            {formatTime(last.at)}
+          </span>
+        </button>
+        <button
+          type="button"
+          onClick={onToggleBlock}
+          aria-label={blocked ? "Unblock origin" : "Block origin"}
+          title={blocked ? "Unblock" : "Block"}
+          className={cn(
+            "mr-1 shrink-0 rounded p-1 transition-colors",
+            blocked
+              ? "text-foreground hover:bg-muted"
+              : "text-muted-foreground opacity-0 hover:bg-muted hover:text-foreground group-hover:opacity-100",
+          )}
+        >
+          {blocked ? (
+            <ShieldOff size={12} strokeWidth={1.5} />
+          ) : (
+            <Shield size={12} strokeWidth={1.5} />
+          )}
+        </button>
+      </div>
       {expanded && (
         <div className="pb-2 pl-5">
           {events
@@ -158,9 +233,16 @@ function OriginGroup({
                 className="flex items-start gap-3 border-t border-border/60 py-1.5 first:border-t-0"
               >
                 <span className="mt-0.5 shrink-0 text-[10px] font-medium uppercase tracking-wider text-subtle">
-                  {e.kind}
+                  {e.blocked ? "blocked" : e.kind}
                 </span>
-                <span className="min-w-0 flex-1 break-all text-xs text-muted-foreground">
+                <span
+                  className={cn(
+                    "min-w-0 flex-1 break-all text-xs",
+                    e.blocked
+                      ? "text-muted-foreground line-through"
+                      : "text-muted-foreground",
+                  )}
+                >
                   {e.url}
                 </span>
                 <span className="shrink-0 text-xs tabular-nums text-subtle">
@@ -192,7 +274,13 @@ function ActionButton({
   );
 }
 
-function EmptyState({ paused }: { paused: boolean }) {
+function EmptyState({
+  paused,
+  blockedCount,
+}: {
+  paused: boolean;
+  blockedCount: number;
+}) {
   return (
     <div className="flex h-64 flex-col items-center justify-center gap-2 text-center">
       <div className="text-sm text-foreground">
@@ -200,8 +288,9 @@ function EmptyState({ paused }: { paused: boolean }) {
       </div>
       <div className="max-w-sm text-xs text-muted-foreground">
         Every navigation Null makes is listed here in real time, grouped by
-        origin. Captures main-frame navigations today; subresource capture
-        lands in a later commit.
+        origin. Hover an origin and click the shield to block all future
+        requests to it.
+        {blockedCount > 0 && ` (${blockedCount} currently blocked.)`}
       </div>
     </div>
   );
@@ -209,7 +298,11 @@ function EmptyState({ paused }: { paused: boolean }) {
 
 function formatTime(unixSeconds: number): string {
   const d = new Date(unixSeconds * 1000);
-  return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" });
+  return d.toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+  });
 }
 
 function groupByOrigin(
@@ -221,7 +314,6 @@ function groupByOrigin(
     if (existing) existing.push(e);
     else groups.set(e.origin, [e]);
   }
-  // Most recently active origin first.
   return Array.from(groups.entries()).sort((a, b) => {
     const aLast = a[1][a[1].length - 1].at;
     const bLast = b[1][b[1].length - 1].at;
