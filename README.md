@@ -19,6 +19,16 @@ There is no account system. There is no sync service. There is no telemetry endp
 
 This is a personal open-source project. There is no business model. There will never be ads, tracking, monetization, or VC capital.
 
+## Why I built this
+
+Every existing browser that calls itself "privacy-focused" still ships its own telemetry, sells a sync subscription, or bolts privacy features onto a business model that depends on my data being legible somewhere else. I wanted a browser that actually let me **reduce, control, and understand my data footprint** — without having to audit the browser itself to find out.
+
+- **Reduce** — the Network Inspector shows every outbound request in real time, grouped by origin. One click on the shield and future requests to that origin are cancelled. You stop hoping the browser isn't talking behind your back and start watching.
+- **Control** — the AI sidebar defaults to a local model running on your own machine via Ollama. Claude and OpenAI (and any OpenAI-compatible endpoint) are supported as opt-in per-provider, with your own API keys stored in the OS keychain and every cloud call surfaced in the UI before it leaves. The key is yours, the conversations are yours, the bill is yours.
+- **Understand** — every piece of state lives in a local SQLite file or localStorage. Bookmarks, history, blocked origins, settings — all inspectable with `sqlite3` or any JSON viewer. Nothing is a remote service you can't open and read.
+
+The AI piece specifically: the modern web is about to route everything through someone else's model, billed to you and observed by them. The bet Null makes is that a modern browser experience should stay **human-driven, not data-driven** — you pick the model, you own the key, the conversations never land on a shared endpoint. Ollama keeps you off the cloud entirely; bring-your-own-Claude/OpenAI keeps you on the cloud only when you've explicitly asked for it. Same tools, same capability, different authority over what leaves your machine.
+
 ## The six invariants
 
 These are not defaults — they are invariants. Code that violates them is a bug.

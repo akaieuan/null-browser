@@ -92,7 +92,7 @@ function EmptyState() {
         local first
       </div>
       <div className="mt-3 text-sm leading-relaxed text-muted-foreground">
-        Run a model with Ollama, or add a provider key in settings.
+        Run Ollama models or add provider keys.
       </div>
       <div className="mt-5 flex items-center gap-4 text-xs">
         <a
