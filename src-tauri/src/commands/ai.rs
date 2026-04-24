@@ -8,6 +8,7 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
+use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter, EventTarget, Manager, Url};
 
 use crate::ai::{anthropic, secrets};
@@ -42,9 +43,10 @@ pub async fn ai_send(
     provider: String,
     model: String,
     prompt: String,
+    on_chunk: Channel<String>,
 ) -> Result<String, String> {
-    let key = secrets::get_key(&provider)?
-        .ok_or_else(|| format!("no key stored for {provider}"))?;
+    let key =
+        secrets::get_key(&provider)?.ok_or_else(|| format!("no key stored for {provider}"))?;
 
     let endpoint = match provider.as_str() {
         "anthropic" => anthropic::ENDPOINT,
@@ -54,7 +56,12 @@ pub async fn ai_send(
     record_outbound(&app, &provider, endpoint);
 
     match provider.as_str() {
-        "anthropic" => anthropic::send(&key, &model, &prompt).await,
+        "anthropic" => {
+            anthropic::send_stream(&key, &model, &prompt, |text| {
+                let _ = on_chunk.send(text.to_string());
+            })
+            .await
+        }
         _ => Err(format!("provider not implemented: {provider}")),
     }
 }

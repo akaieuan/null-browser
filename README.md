@@ -4,6 +4,8 @@ An open-source web browser where nothing is sent, nothing is stored, nothing is 
 
 The name is the thesis: `null` is the value a function returns when there is nothing to return, and that is the correct default for a browser.
 
+![Null browser — Google homepage with the Profile panel open showing Appearance swatches, Start page, Search engine, and AI providers.](docs/screenshots/overview.png)
+
 ---
 
 ## What is Null?

@@ -68,7 +68,7 @@ export function AIDrawer({ onClose }: { onClose: () => void }) {
         </Button>
       </header>
 
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 overflow-y-auto overflow-x-hidden">
         {!hasKey ? (
           <EmptyState onKeySaved={() => ipc.aiProviderStatus().then(setStatus)} />
         ) : (
@@ -150,7 +150,7 @@ function ChatLog({ messages, pending }: { messages: Message[]; pending: boolean 
         <div
           key={i}
           className={cn(
-            "whitespace-pre-wrap rounded-2xl px-3 py-2",
+            "max-w-[85%] whitespace-pre-wrap break-words rounded-2xl px-3 py-2",
             m.role === "user" && "self-end bg-muted text-foreground",
             m.role === "assistant" && "self-start text-foreground",
             m.role === "error" && "self-start text-red-500",
