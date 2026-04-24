@@ -38,6 +38,7 @@ import { HistoryPanel } from "@/components/panels/HistoryPanel";
 import { ProfileMenu } from "@/components/panels/ProfileMenu";
 import { SettingsPanel } from "@/components/panels/SettingsPanel";
 import { ipc, type Bookmark } from "@/lib/ipc";
+import { usePreferences, resolveStartUrl } from "@/lib/preferences";
 import { type Mode, type PaletteId, useTheme } from "@/lib/theme";
 import { resolveQuery } from "@/lib/url";
 import { cn } from "@/lib/utils";
@@ -61,7 +62,6 @@ type Tab = {
 };
 
 const BLANK_URL = "about:blank";
-const PROFILE_NAME = "Null";
 
 function uuid(): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -92,6 +92,7 @@ function App() {
   const [showHistory, setShowHistory] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const { setPalette, setMode } = useTheme();
+  const { startPage } = usePreferences();
   const inputRef = useRef<HTMLInputElement>(null);
   const focusedRef = useRef(false);
 
@@ -245,10 +246,12 @@ function App() {
   );
 
   const openNewTab = useCallback(
-    async (url: string = BLANK_URL) => {
+    async (url?: string) => {
+      const resolved = url ?? resolveStartUrl(startPage) ?? BLANK_URL;
       const id = uuid();
-      if (url !== BLANK_URL) {
-        await ipc.openTab(id, url, topBarHeight);
+      const hasWebview = resolved !== BLANK_URL;
+      if (hasWebview) {
+        await ipc.openTab(id, resolved, topBarHeight);
         await ipc.activateTab(id);
       } else {
         await ipc.hideAllTabs();
@@ -257,16 +260,16 @@ function App() {
         ...prev,
         {
           id,
-          url,
-          title: hostnameFor(url),
-          hasWebview: url !== BLANK_URL,
+          url: resolved,
+          title: hostnameFor(resolved),
+          hasWebview,
         },
       ]);
       setActiveId(id);
-      setInput(url === BLANK_URL ? "" : url);
+      setInput(hasWebview ? resolved : "");
       inputRef.current?.focus();
     },
-    [topBarHeight],
+    [topBarHeight, startPage],
   );
 
   const activateTabById = useCallback(
@@ -412,7 +415,10 @@ function App() {
   }
 
   return (
-    <div className="flex h-screen flex-col bg-background text-foreground">
+    <div
+      data-tauri-drag-region
+      className="flex h-screen flex-col bg-background text-foreground"
+    >
       {/* Row 1: tab strip */}
       <div
         data-tauri-drag-region
@@ -423,7 +429,10 @@ function App() {
           paddingRight: 8,
         }}
       >
-        <div className="flex min-w-0 flex-1 items-end gap-1 overflow-x-auto">
+        <div
+          data-tauri-drag-region
+          className="flex min-w-0 flex-1 items-end gap-1 overflow-x-auto"
+        >
           {tabs.map((tab) => (
             <TabPill
               key={tab.id}
@@ -441,7 +450,6 @@ function App() {
           aria-label="New Tab"
           onClick={() => openNewTab()}
           className="mb-1 ml-1"
-          data-tauri-drag-region="false"
         >
           <Plus strokeWidth={1.5} />
         </Button>
@@ -459,7 +467,6 @@ function App() {
           aria-label="Back"
           disabled={!hasActiveWebview}
           onClick={() => activeId && ipc.goBack(activeId)}
-          data-tauri-drag-region="false"
         >
           <ChevronLeft strokeWidth={1.5} />
         </Button>
@@ -469,7 +476,6 @@ function App() {
           aria-label="Forward"
           disabled={!hasActiveWebview}
           onClick={() => activeId && ipc.goForward(activeId)}
-          data-tauri-drag-region="false"
         >
           <ChevronRight strokeWidth={1.5} />
         </Button>
@@ -479,7 +485,6 @@ function App() {
           aria-label="Reload"
           disabled={!hasActiveWebview}
           onClick={() => activeId && ipc.reload(activeId)}
-          data-tauri-drag-region="false"
         >
           <RotateCw strokeWidth={1.5} />
         </Button>
@@ -498,7 +503,6 @@ function App() {
               aria-label={activeBookmark ? "Remove bookmark" : "Add bookmark"}
               disabled={!hasActiveWebview}
               onClick={toggleBookmark}
-              data-tauri-drag-region="false"
               className={cn(
                 "shrink-0 rounded-sm p-1 ml-1 transition-colors",
                 activeBookmark
@@ -547,7 +551,6 @@ function App() {
               setShowHistory((v) => !v);
             }}
             className={cn(showHistory && "bg-muted text-foreground")}
-            data-tauri-drag-region="false"
           >
             <HistoryIcon strokeWidth={1.5} />
           </Button>
@@ -557,7 +560,6 @@ function App() {
             aria-label="Chat"
             onClick={() => setShowAiDrawer((v) => !v)}
             className={cn(showAiDrawer && "bg-muted text-foreground")}
-            data-tauri-drag-region="false"
           >
             <Sparkles strokeWidth={1.5} />
           </Button>
@@ -570,7 +572,6 @@ function App() {
               setShowSettings((v) => !v);
             }}
             className={cn(showSettings && "bg-muted text-foreground")}
-            data-tauri-drag-region="false"
           >
             <SettingsIcon strokeWidth={1.5} />
           </Button>
@@ -584,7 +585,6 @@ function App() {
               setProfileMenuOpen((v) => !v);
             }}
             className={cn(profileMenuOpen && "bg-muted text-foreground")}
-            data-tauri-drag-region="false"
           >
             <User strokeWidth={1.5} />
           </Button>
@@ -637,7 +637,10 @@ function App() {
       {/* Below the top bars: content area + AI drawer side-by-side.
           Content webview is positioned here by Tauri; React just manages
           landing/panels/drawer on top. */}
-      <div className="relative flex flex-1 min-h-0">
+      <div
+        data-tauri-drag-region="false"
+        className="relative flex flex-1 min-h-0"
+      >
         <div className="relative flex-1">
           {showLanding && (
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-8 px-8">
@@ -663,8 +666,11 @@ function App() {
           )}
           {profileMenuOpen && (
             <ProfileMenu
-              profileName={PROFILE_NAME}
               onClose={() => setProfileMenuOpen(false)}
+              onOpenSettings={() => {
+                setProfileMenuOpen(false);
+                setShowSettings(true);
+              }}
             />
           )}
         </div>
