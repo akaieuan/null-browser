@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   ChevronLeft,
   ChevronRight,
@@ -146,6 +147,31 @@ function App() {
     setDraggingBookmarkId(null);
   }, []);
 
+  // Explicit window-drag handler. The `data-tauri-drag-region` attribute
+  // can be flaky depending on Tauri version and WebView; calling
+  // startDragging() directly is always reliable. Opt out when the click
+  // target is interactive (button/input/form) or an ancestor is marked
+  // data-tauri-drag-region="false".
+  const handleChromeMouseDown = useCallback((e: React.MouseEvent) => {
+    if (e.button !== 0) return;
+    let node = e.target as HTMLElement | null;
+    while (node && node !== e.currentTarget) {
+      const tag = node.tagName;
+      if (
+        tag === "BUTTON" ||
+        tag === "INPUT" ||
+        tag === "TEXTAREA" ||
+        tag === "SELECT" ||
+        tag === "A"
+      ) {
+        return;
+      }
+      if (node.dataset && node.dataset.tauriDragRegion === "false") return;
+      node = node.parentElement;
+    }
+    getCurrentWindow().startDragging().catch(() => {});
+  }, []);
+
   // Load bookmarks on mount.
   useEffect(() => {
     ipc.listBookmarks().then(setBookmarks).catch(() => {});
@@ -199,12 +225,16 @@ function App() {
   useEffect(() => {
     const promise = listen<{ id: string; url: string }>("tab-updated", (e) => {
       const { id, url } = e.payload;
+      const title = hostnameFor(url);
       setTabs((prev) =>
-        prev.map((t) =>
-          t.id === id ? { ...t, url, title: hostnameFor(url) } : t,
-        ),
+        prev.map((t) => (t.id === id ? { ...t, url, title } : t)),
       );
       if (id === activeId && !focusedRef.current) setInput(url);
+      // Local history: every finished page load, URL + title go to SQLite.
+      // Skip about:* and data: URLs — those aren't real visits.
+      if (url && !/^about:|^data:/i.test(url)) {
+        ipc.addHistory(url, title).catch(() => {});
+      }
     });
     return () => {
       promise.then((off) => off());
@@ -417,6 +447,7 @@ function App() {
   return (
     <div
       data-tauri-drag-region
+      onMouseDown={handleChromeMouseDown}
       className="flex h-screen flex-col bg-background text-foreground"
     >
       {/* Row 1: tab strip */}
@@ -662,7 +693,13 @@ function App() {
             <SettingsPanel onClose={() => setShowSettings(false)} />
           )}
           {showHistory && (
-            <HistoryPanel onClose={() => setShowHistory(false)} />
+            <HistoryPanel
+              onClose={() => setShowHistory(false)}
+              onOpenUrl={(url) => {
+                setShowHistory(false);
+                navigateTo(url);
+              }}
+            />
           )}
           {profileMenuOpen && (
             <ProfileMenu

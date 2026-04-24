@@ -7,6 +7,13 @@ export type Bookmark = {
   created_at: number;
 };
 
+export type HistoryEntry = {
+  id: number;
+  url: string;
+  title: string;
+  visited_at: number;
+};
+
 export const ipc = {
   getAppVersion: () => invoke<string>("get_app_version"),
 
@@ -33,4 +40,11 @@ export const ipc = {
     invoke<void>("remove_bookmark_by_url", { url }),
   reorderBookmarks: (orderedIds: number[]) =>
     invoke<void>("reorder_bookmarks", { orderedIds }),
+
+  listHistory: (limit?: number) =>
+    invoke<HistoryEntry[]>("list_history", { limit }),
+  addHistory: (url: string, title: string) =>
+    invoke<void>("add_history", { url, title }),
+  removeHistory: (id: number) => invoke<void>("remove_history", { id }),
+  clearHistory: () => invoke<void>("clear_history"),
 };

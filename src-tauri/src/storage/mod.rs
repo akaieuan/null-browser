@@ -23,6 +23,15 @@ pub struct Bookmark {
     pub created_at: i64,
 }
 
+/// One visit in the local history.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HistoryEntry {
+    pub id: i64,
+    pub url: String,
+    pub title: String,
+    pub visited_at: i64,
+}
+
 /// Owned handle to the single SQLite connection used by the app.
 ///
 /// Managed via Tauri state so command handlers can acquire it with
@@ -111,6 +120,47 @@ impl Storage {
             }
         }
         tx.commit()
+    }
+
+    pub fn add_history(&self, url: &str, title: &str) -> rusqlite::Result<()> {
+        let conn = self.conn();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        conn.execute(
+            "INSERT INTO history (url, title, visited_at) VALUES (?1, ?2, ?3)",
+            params![url, title, now],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_history(&self, limit: i64) -> rusqlite::Result<Vec<HistoryEntry>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT id, url, title, visited_at FROM history ORDER BY visited_at DESC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(params![limit], |row| {
+            Ok(HistoryEntry {
+                id: row.get(0)?,
+                url: row.get(1)?,
+                title: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                visited_at: row.get(3)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    pub fn remove_history(&self, id: i64) -> rusqlite::Result<()> {
+        let conn = self.conn();
+        conn.execute("DELETE FROM history WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    pub fn clear_history(&self) -> rusqlite::Result<()> {
+        let conn = self.conn();
+        conn.execute("DELETE FROM history", [])?;
+        Ok(())
     }
 }
 
