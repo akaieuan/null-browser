@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 
 export type Bookmark = {
   id: number;
@@ -85,6 +85,12 @@ export const ipc = {
   aiSetKey: (provider: string, key: string) =>
     invoke<void>("ai_set_key", { provider, key }),
   aiProviderStatus: () => invoke<ProviderStatus>("ai_provider_status"),
-  aiSend: (provider: string, model: string, prompt: string) =>
-    invoke<string>("ai_send", { provider, model, prompt }),
+  aiSend: (
+    provider: string,
+    model: string,
+    prompt: string,
+    onChunk: Channel<string>,
+  ) => invoke<string>("ai_send", { provider, model, prompt, onChunk }),
 };
+
+export { Channel };

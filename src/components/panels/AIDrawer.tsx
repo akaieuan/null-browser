@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { AI_DRAWER_WIDTH } from "@/lib/layout";
-import { ipc, type ProviderStatus } from "@/lib/ipc";
+import { Channel, ipc, type ProviderStatus } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 
 export { AI_DRAWER_WIDTH };
@@ -34,14 +34,33 @@ export function AIDrawer({ onClose }: { onClose: () => void }) {
   const send = async () => {
     const prompt = draft.trim();
     if (!prompt || pending || !hasKey) return;
-    setMessages((m) => [...m, { role: "user", content: prompt }]);
+    setMessages((m) => [
+      ...m,
+      { role: "user", content: prompt },
+      { role: "assistant", content: "" },
+    ]);
     setDraft("");
     setPending(true);
+
+    const onChunk = new Channel<string>();
+    onChunk.onmessage = (text) => {
+      setMessages((m) => {
+        const copy = [...m];
+        const last = copy[copy.length - 1];
+        if (last && last.role === "assistant") {
+          copy[copy.length - 1] = { ...last, content: last.content + text };
+        }
+        return copy;
+      });
+    };
+
     try {
-      const reply = await ipc.aiSend(DEFAULT_PROVIDER, DEFAULT_MODEL, prompt);
-      setMessages((m) => [...m, { role: "assistant", content: reply }]);
+      await ipc.aiSend(DEFAULT_PROVIDER, DEFAULT_MODEL, prompt, onChunk);
     } catch (e) {
-      setMessages((m) => [...m, { role: "error", content: String(e) }]);
+      setMessages((m) => {
+        const copy = m.slice(0, -1);
+        return [...copy, { role: "error", content: String(e) }];
+      });
     } finally {
       setPending(false);
     }
@@ -146,20 +165,28 @@ function ChatLog({ messages, pending }: { messages: Message[]; pending: boolean 
   }
   return (
     <div className="flex flex-col gap-3 px-3 py-4 text-sm">
-      {messages.map((m, i) => (
-        <div
-          key={i}
-          className={cn(
-            "max-w-[85%] whitespace-pre-wrap break-words rounded-2xl px-3 py-2",
-            m.role === "user" && "self-end bg-muted text-foreground",
-            m.role === "assistant" && "self-start text-foreground",
-            m.role === "error" && "self-start text-red-500",
-          )}
-        >
-          {m.content}
-        </div>
-      ))}
-      {pending && <div className="self-start text-muted-foreground">…</div>}
+      {messages.map((m, i) => {
+        const isLast = i === messages.length - 1;
+        const showWaitingDot =
+          isLast && pending && m.role === "assistant" && m.content === "";
+        return (
+          <div
+            key={i}
+            className={cn(
+              "max-w-[85%] whitespace-pre-wrap break-words rounded-2xl px-3 py-2",
+              m.role === "user" && "self-end bg-muted text-foreground",
+              m.role === "assistant" && "self-start text-foreground",
+              m.role === "error" && "self-start text-red-500",
+            )}
+          >
+            {showWaitingDot ? (
+              <span className="text-muted-foreground">…</span>
+            ) : (
+              m.content
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }

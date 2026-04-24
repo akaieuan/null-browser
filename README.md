@@ -66,6 +66,9 @@ Read the full reasoning in [docs/PHILOSOPHY.md](docs/PHILOSOPHY.md).
 - Remove individual entries, clear all — never synced, never uploaded
 
 ### Network Inspector
+
+![Null Network Inspector — 153 requests across 20 origins captured from a single YouTube page load, grouped by origin.](docs/screenshots/network-inspector.png)
+
 - `⌘⇧I` opens the panel
 - Live stream of every request — main-frame navigations and subresources (scripts, fonts, images, CSS, XHR, fetch)
 - Grouped by origin with request counts and timestamps
