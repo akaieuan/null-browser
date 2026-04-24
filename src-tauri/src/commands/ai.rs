@@ -19,11 +19,7 @@ pub struct ProviderStatus {
 }
 
 #[tauri::command]
-pub fn ai_set_key(
-    cache: State<KeyCache>,
-    provider: String,
-    key: String,
-) -> Result<(), String> {
+pub fn ai_set_key(cache: State<KeyCache>, provider: String, key: String) -> Result<(), String> {
     match provider.as_str() {
         "anthropic" | "openai" => {}
         _ => return Err(format!("unknown provider: {provider}")),

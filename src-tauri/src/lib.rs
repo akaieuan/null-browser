@@ -53,13 +53,11 @@ pub fn run() {
                                 _ => {}
                             }
                         }
-                        if let (Some(r), Some(i), Some(n), Some(d)) =
-                            (req_id, index, total, data)
-                        {
+                        if let (Some(r), Some(i), Some(n), Some(d)) = (req_id, index, total, data) {
                             if let Some(reg) = ctx
                                 .app_handle()
-                                .try_state::<webview::extract::ExtractRegistry>(
-                            ) {
+                                .try_state::<webview::extract::ExtractRegistry>()
+                            {
                                 reg.ingest_chunk(&r, i, n, &d);
                             }
                         }

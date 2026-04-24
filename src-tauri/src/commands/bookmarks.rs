@@ -71,14 +71,8 @@ pub fn show_bookmark_menu<R: Runtime>(
         None::<&str>,
     )
     .map_err(|e| e.to_string())?;
-    let edit = MenuItem::with_id(
-        &app,
-        format!("bmk:edit:{id}"),
-        "Edit…",
-        true,
-        None::<&str>,
-    )
-    .map_err(|e| e.to_string())?;
+    let edit = MenuItem::with_id(&app, format!("bmk:edit:{id}"), "Edit…", true, None::<&str>)
+        .map_err(|e| e.to_string())?;
     let copy_url = MenuItem::with_id(
         &app,
         format!("bmk:copy_url:{id}"),

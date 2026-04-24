@@ -298,9 +298,8 @@ try {
 /// the page's globals.
 pub fn run_extract(app: &AppHandle, tab_id: &str, req_id: &str) -> Result<(), String> {
     let req_id_literal = js_string_literal(req_id);
-    let mut script = String::with_capacity(
-        READABILITY_JS.len() + TURNDOWN_JS.len() + EXTRACT_GLUE.len() + 128,
-    );
+    let mut script =
+        String::with_capacity(READABILITY_JS.len() + TURNDOWN_JS.len() + EXTRACT_GLUE.len() + 128);
     script.push_str("(function(){\n");
     script.push_str("var __NULL_REQ_ID__ = ");
     script.push_str(&req_id_literal);

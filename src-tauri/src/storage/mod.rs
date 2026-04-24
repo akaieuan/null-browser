@@ -125,12 +125,7 @@ impl Storage {
         Ok(())
     }
 
-    pub fn update_bookmark(
-        &self,
-        id: i64,
-        url: &str,
-        title: &str,
-    ) -> rusqlite::Result<()> {
+    pub fn update_bookmark(&self, id: i64, url: &str, title: &str) -> rusqlite::Result<()> {
         let conn = self.conn();
         conn.execute(
             "UPDATE bookmarks SET url = ?1, title = ?2 WHERE id = ?3",

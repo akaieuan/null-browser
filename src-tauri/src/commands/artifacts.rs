@@ -77,9 +77,7 @@ pub async fn summarize_current_tab(
     let payload = match webview::extract::extract_tab(&app, &registry, &tab_id).await {
         Ok(p) => p,
         Err(e) => {
-            let _ = on_event.send(ArtifactEvent::Error {
-                message: e.clone(),
-            });
+            let _ = on_event.send(ArtifactEvent::Error { message: e.clone() });
             return Err(e);
         }
     };
@@ -114,9 +112,7 @@ pub async fn summarize_current_tab(
     {
         Ok(s) => s,
         Err(e) => {
-            let _ = on_event.send(ArtifactEvent::Error {
-                message: e.clone(),
-            });
+            let _ = on_event.send(ArtifactEvent::Error { message: e.clone() });
             return Err(e);
         }
     };
@@ -199,9 +195,7 @@ pub async fn chat_with_page(
             let p = match webview::extract::extract_tab(&app, &registry, &tab_id).await {
                 Ok(p) => p,
                 Err(e) => {
-                    let _ = on_event.send(ChatEvent::Error {
-                        message: e.clone(),
-                    });
+                    let _ = on_event.send(ChatEvent::Error { message: e.clone() });
                     return Err(e);
                 }
             };
@@ -239,9 +233,7 @@ pub async fn chat_with_page(
     {
         Ok(s) => s,
         Err(e) => {
-            let _ = on_event.send(ChatEvent::Error {
-                message: e.clone(),
-            });
+            let _ = on_event.send(ChatEvent::Error { message: e.clone() });
             return Err(e);
         }
     };

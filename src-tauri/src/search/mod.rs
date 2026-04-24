@@ -34,10 +34,7 @@ struct SearxngResult {
 
 /// Query a SearXNG instance. `instance_url` should be the root (e.g.
 /// `https://searx.example.com`); the `/search` path is appended.
-pub async fn searxng_search(
-    instance_url: &str,
-    query: &str,
-) -> Result<Vec<SearchResult>, String> {
+pub async fn searxng_search(instance_url: &str, query: &str) -> Result<Vec<SearchResult>, String> {
     let base = instance_url.trim_end_matches('/');
     let endpoint = format!("{base}/search");
     let res = reqwest::Client::new()

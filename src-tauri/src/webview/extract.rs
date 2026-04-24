@@ -179,9 +179,7 @@ pub async fn extract_tab(
         Ok(Ok(p)) => p,
         Ok(Err(_)) | Err(_) => {
             registry.take(&req_id);
-            return Err(
-                "couldn't read this page (strict CSP, or not an article)".to_string(),
-            );
+            return Err("couldn't read this page (strict CSP, or not an article)".to_string());
         }
     };
 
