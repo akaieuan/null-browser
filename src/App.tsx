@@ -93,13 +93,13 @@ function App() {
   const [showHistory, setShowHistory] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const { setPalette, setMode } = useTheme();
-  const { startPage } = usePreferences();
+  const { startPage, searchEngine } = usePreferences();
   const inputRef = useRef<HTMLInputElement>(null);
   const focusedRef = useRef(false);
 
   const activeTab = tabs.find((t) => t.id === activeId) ?? null;
   const hasActiveWebview = activeTab?.hasWebview ?? false;
-  const modalOpen = showSettings || showHistory || profileMenuOpen;
+  const modalOpen = showSettings || showHistory;
   const showLanding = !modalOpen && (!activeTab || !activeTab.hasWebview);
   const showBookmarkBar = bookmarks.length > 0;
 
@@ -438,7 +438,7 @@ function App() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    const url = resolveQuery(input);
+    const url = resolveQuery(input, searchEngine);
     if (!url) return;
     await navigateTo(url);
     inputRef.current?.blur();

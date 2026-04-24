@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 
 const NAME_KEY = "null.profile_name";
 const START_PAGE_KEY = "null.start_page";
+const SEARCH_ENGINE_KEY = "null.search_engine";
 
 const DEFAULT_NAME = "Null";
 
@@ -55,10 +56,72 @@ export function isCustomStartPage(pref: StartPagePref): boolean {
   return /^https?:\/\//i.test(pref);
 }
 
+// Search engines. Each entry is a query URL template where %s gets replaced
+// with the URL-encoded query. All options are no-tracking commitments.
+export type SearchEngineId =
+  | "duckduckgo"
+  | "brave"
+  | "mojeek"
+  | "startpage";
+
+export interface SearchEngine {
+  id: SearchEngineId;
+  label: string;
+  template: string;
+  note: string;
+}
+
+export const SEARCH_ENGINES: SearchEngine[] = [
+  {
+    id: "duckduckgo",
+    label: "DuckDuckGo",
+    template: "https://duckduckgo.com/?q=%s",
+    note: "Bing-backed · no logs",
+  },
+  {
+    id: "brave",
+    label: "Brave",
+    template: "https://search.brave.com/search?q=%s",
+    note: "Independent index · no logs",
+  },
+  {
+    id: "mojeek",
+    label: "Mojeek",
+    template: "https://www.mojeek.com/search?q=%s",
+    note: "Independent index · no tracking",
+  },
+  {
+    id: "startpage",
+    label: "Startpage",
+    template: "https://www.startpage.com/sp/search?query=%s",
+    note: "Anonymous Google · proxy",
+  },
+];
+
+export const DEFAULT_SEARCH_ENGINE: SearchEngineId = "duckduckgo";
+
+function isSearchEngineId(id: string | null): id is SearchEngineId {
+  return !!id && SEARCH_ENGINES.some((e) => e.id === id);
+}
+
+export function loadSearchEngine(): SearchEngineId {
+  const raw = safeGet(SEARCH_ENGINE_KEY);
+  return isSearchEngineId(raw) ? raw : DEFAULT_SEARCH_ENGINE;
+}
+
+/** Build a full search URL for a query against the given engine. */
+export function searchUrlFor(engine: SearchEngineId, query: string): string {
+  const found =
+    SEARCH_ENGINES.find((e) => e.id === engine) ?? SEARCH_ENGINES[0];
+  return found.template.replace("%s", encodeURIComponent(query));
+}
+
 /** React hook with reactive state + localStorage persistence. */
 export function usePreferences() {
   const [name, setNameState] = useState<string>(loadProfileName);
   const [startPage, setStartPageState] = useState<StartPagePref>(loadStartPage);
+  const [searchEngine, setSearchEngineState] =
+    useState<SearchEngineId>(loadSearchEngine);
 
   useEffect(() => {
     safeSet(NAME_KEY, name);
@@ -67,6 +130,10 @@ export function usePreferences() {
   useEffect(() => {
     safeSet(START_PAGE_KEY, startPage);
   }, [startPage]);
+
+  useEffect(() => {
+    safeSet(SEARCH_ENGINE_KEY, searchEngine);
+  }, [searchEngine]);
 
   const setName = useCallback((next: string) => {
     const trimmed = next.trim();
@@ -77,5 +144,16 @@ export function usePreferences() {
     setStartPageState(next);
   }, []);
 
-  return { name, setName, startPage, setStartPage };
+  const setSearchEngine = useCallback((next: SearchEngineId) => {
+    setSearchEngineState(next);
+  }, []);
+
+  return {
+    name,
+    setName,
+    startPage,
+    setStartPage,
+    searchEngine,
+    setSearchEngine,
+  };
 }

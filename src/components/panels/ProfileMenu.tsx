@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { Moon, Settings as SettingsIcon, Sun } from "lucide-react";
 
-import { PanelHeader } from "@/components/panels/PanelHeader";
 import {
   DEFAULT_START_PAGE,
   isCustomStartPage,
+  SEARCH_ENGINES,
   usePreferences,
   type StartPagePref,
 } from "@/lib/preferences";
@@ -12,10 +12,10 @@ import { PALETTES, useTheme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 
 /**
- * Profile panel. Rendered as a full-surface overlay (tabs hidden behind it)
- * with a small prefs card pinned top-right. A dropdown anchored to the
- * toolbar button gets clipped by Tauri child webviews, so this is the
- * right pattern.
+ * Profile dropdown. Small prefs card pinned to the top-right under the
+ * profile button. The active tab is hidden while this is open (tabs are
+ * Tauri child webviews that always render above React — the only way for
+ * the dropdown not to be clipped is to hide them).
  */
 export function ProfileMenu({
   onClose,
@@ -25,7 +25,14 @@ export function ProfileMenu({
   onOpenSettings: () => void;
 }) {
   const cardRef = useRef<HTMLDivElement>(null);
-  const { name, setName, startPage, setStartPage } = usePreferences();
+  const {
+    name,
+    setName,
+    startPage,
+    setStartPage,
+    searchEngine,
+    setSearchEngine,
+  } = usePreferences();
   const { palette, setPalette, mode, toggleMode } = useTheme();
   const [nameDraft, setNameDraft] = useState(name);
 
@@ -54,13 +61,11 @@ export function ProfileMenu({
   }
 
   return (
-    <div className="absolute inset-0 z-40 bg-background text-foreground">
-      <PanelHeader title="Profile" onClose={onClose} />
-      <div className="flex justify-end px-4">
-        <div
-          ref={cardRef}
-          className="w-80 overflow-hidden rounded-lg border border-border bg-muted/20"
-        >
+    <div className="absolute inset-0 z-40 flex justify-end p-2 text-foreground">
+      <div
+        ref={cardRef}
+        className="h-fit w-80 overflow-hidden rounded-lg border border-border bg-background shadow-lg"
+      >
           {/* Identity */}
           <div className="flex items-center gap-3 p-4">
             <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-muted text-sm font-medium text-foreground">
@@ -157,16 +162,33 @@ export function ProfileMenu({
 
           <div className="h-px bg-border" />
 
-          {/* Footer action */}
-          <button
-            type="button"
-            onClick={onOpenSettings}
-            className="flex w-full items-center gap-2 px-4 py-3 text-left text-xs text-muted-foreground hover:bg-muted/60 hover:text-foreground"
-          >
-            <SettingsIcon size={12} strokeWidth={1.5} />
-            Open full settings
-          </button>
-        </div>
+          {/* Search engine */}
+          <div className="p-4">
+            <Label>Search</Label>
+            <div className="mt-1 flex flex-col gap-0.5">
+              {SEARCH_ENGINES.map((engine) => (
+                <Radio
+                  key={engine.id}
+                  label={engine.label}
+                  hint={engine.note}
+                  selected={searchEngine === engine.id}
+                  onSelect={() => setSearchEngine(engine.id)}
+                />
+              ))}
+            </div>
+          </div>
+
+          <div className="h-px bg-border" />
+
+        {/* Footer action */}
+        <button
+          type="button"
+          onClick={onOpenSettings}
+          className="flex w-full items-center gap-2 px-4 py-3 text-left text-xs text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+        >
+          <SettingsIcon size={12} strokeWidth={1.5} />
+          Open full settings
+        </button>
       </div>
     </div>
   );
@@ -182,10 +204,12 @@ function Label({ children }: { children: React.ReactNode }) {
 
 function Radio({
   label,
+  hint,
   selected,
   onSelect,
 }: {
   label: string;
+  hint?: string;
   selected: boolean;
   onSelect: () => void;
 }) {
@@ -193,7 +217,7 @@ function Radio({
     <button
       type="button"
       onClick={onSelect}
-      className="flex w-full items-center gap-2.5 rounded px-1 py-1.5 text-left text-sm text-foreground hover:bg-muted/60"
+      className="flex w-full items-center gap-2.5 rounded px-1 py-1.5 text-left hover:bg-muted/60"
     >
       <span
         className={cn(
@@ -203,7 +227,12 @@ function Radio({
             : "border-border",
         )}
       />
-      <span>{label}</span>
+      <span className="flex min-w-0 flex-1 items-baseline gap-2">
+        <span className="text-sm text-foreground">{label}</span>
+        {hint && (
+          <span className="truncate text-[10px] text-subtle">{hint}</span>
+        )}
+      </span>
     </button>
   );
 }
