@@ -79,6 +79,9 @@ pub fn run() {
             commands::network::block_origin,
             commands::network::unblock_origin,
             commands::network::list_blocked_origins,
+            commands::ai::ai_set_key,
+            commands::ai::ai_provider_status,
+            commands::ai::ai_send,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

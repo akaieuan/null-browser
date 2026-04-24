@@ -29,6 +29,11 @@ export type BlockedOrigin = {
   created_at: number;
 };
 
+export type ProviderStatus = {
+  anthropic: boolean;
+  openai: boolean;
+};
+
 export const ipc = {
   getAppVersion: () => invoke<string>("get_app_version"),
 
@@ -76,4 +81,10 @@ export const ipc = {
     invoke<void>("unblock_origin", { origin }),
   listBlockedOrigins: () =>
     invoke<BlockedOrigin[]>("list_blocked_origins"),
+
+  aiSetKey: (provider: string, key: string) =>
+    invoke<void>("ai_set_key", { provider, key }),
+  aiProviderStatus: () => invoke<ProviderStatus>("ai_provider_status"),
+  aiSend: (provider: string, model: string, prompt: string) =>
+    invoke<string>("ai_send", { provider, model, prompt }),
 };

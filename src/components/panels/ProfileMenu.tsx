@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Check,
   ChevronDown,
@@ -15,7 +15,7 @@ import {
   usePreferences,
   type StartPagePref,
 } from "@/lib/preferences";
-import { ipc } from "@/lib/ipc";
+import { ipc, type ProviderStatus } from "@/lib/ipc";
 import { PALETTES, useTheme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 
@@ -45,6 +45,17 @@ export function ProfileMenu({
   const [clearState, setClearState] = useState<"idle" | "confirm" | "done">(
     "idle",
   );
+  const [providerStatus, setProviderStatus] = useState<ProviderStatus | null>(
+    null,
+  );
+
+  const refreshProviders = useCallback(() => {
+    ipc.aiProviderStatus().then(setProviderStatus).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    refreshProviders();
+  }, [refreshProviders]);
 
   useEffect(() => {
     setNameDraft(name);
@@ -215,6 +226,38 @@ export function ProfileMenu({
           />
         </div>
 
+        {/* AI providers */}
+        <div className="px-4 pb-3">
+          <Label>AI providers</Label>
+          <div className="mt-1.5 flex flex-col gap-0.5">
+            <ProviderRow
+              label="Anthropic"
+              hint="Claude · bring your own key"
+              placeholder="sk-ant-…"
+              configured={providerStatus?.anthropic ?? false}
+              onSave={async (key) => {
+                await ipc.aiSetKey("anthropic", key);
+                refreshProviders();
+              }}
+            />
+            <ProviderRow
+              label="OpenAI"
+              hint="GPT · bring your own key"
+              placeholder="sk-…"
+              configured={providerStatus?.openai ?? false}
+              onSave={async (key) => {
+                await ipc.aiSetKey("openai", key);
+                refreshProviders();
+              }}
+            />
+          </div>
+          <div className="mt-2 px-1 text-[10px] leading-relaxed text-subtle">
+            Keys live in your OS keychain — never synced, never written to
+            disk, never sent anywhere except to the provider you use them
+            against. Every call is logged in the Network Inspector.
+          </div>
+        </div>
+
         {/* Clear browsing data */}
         <div className="px-4 pb-4">
           <button
@@ -255,6 +298,94 @@ function Label({ children }: { children: React.ReactNode }) {
     <div className="text-[10px] font-medium uppercase tracking-wider text-subtle">
       {children}
     </div>
+  );
+}
+
+function ProviderRow({
+  label,
+  hint,
+  placeholder,
+  configured,
+  onSave,
+}: {
+  label: string;
+  hint: string;
+  placeholder: string;
+  configured: boolean;
+  onSave: (key: string) => Promise<void>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  async function commit() {
+    const trimmed = draft.trim();
+    if (!trimmed) {
+      setEditing(false);
+      return;
+    }
+    setSaving(true);
+    try {
+      await onSave(trimmed);
+    } finally {
+      setSaving(false);
+      setDraft("");
+      setEditing(false);
+    }
+  }
+
+  if (editing) {
+    return (
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          commit();
+        }}
+        className="flex items-center gap-1"
+      >
+        <input
+          type="password"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") {
+              setEditing(false);
+              setDraft("");
+            }
+          }}
+          autoFocus
+          disabled={saving}
+          placeholder={placeholder}
+          spellCheck={false}
+          autoCapitalize="off"
+          autoCorrect="off"
+          className="h-7 flex-1 rounded-md border border-border bg-input px-2 text-xs text-foreground placeholder:text-muted-foreground focus:border-ring focus:outline-none"
+        />
+      </form>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => setEditing(true)}
+      className="group flex w-full items-center gap-2 rounded px-1 py-1.5 text-left hover:bg-muted/60"
+    >
+      <span
+        className={cn(
+          "h-1.5 w-1.5 shrink-0 rounded-full",
+          configured ? "bg-foreground" : "bg-border",
+        )}
+      />
+      <span className="flex min-w-0 flex-1 items-baseline gap-2">
+        <span className="text-sm text-foreground">{label}</span>
+        <span className="truncate text-[10px] text-subtle">{hint}</span>
+      </span>
+      <span className="shrink-0 text-[10px] text-muted-foreground group-hover:text-foreground">
+        {configured ? "Change" : "Connect"}
+      </span>
+    </button>
   );
 }
 
