@@ -6,6 +6,10 @@ The name is the thesis: `null` is the value a function returns when there is not
 
 ![Null browser — Google homepage with the Profile panel open showing Appearance swatches, Start page, Search engine, and AI providers.](docs/screenshots/overview.png)
 
+<video src="https://github.com/akaieuan/null-browser/raw/HEAD/docs/screenshots/null-browser.webm" controls width="100%"></video>
+
+_[Watch the demo](docs/screenshots/null-browser.webm) — the AI drawer with chat, summarize, search, and save modes running against a live tab._
+
 ---
 
 ## What is Null?
@@ -13,7 +17,7 @@ The name is the thesis: `null` is the value a function returns when there is not
 Null is a macOS desktop browser built on Tauri 2 (Rust) with a React + TypeScript UI. It uses the system WebView (WebKit on macOS), so it renders pages like Safari would — but the browser itself is written with different defaults.
 
 **The thesis:**
-1. **Local-first AI.** The AI sidebar talks to a model on your own machine via Ollama. Cloud providers exist, but they're opt-in per-provider, and every call that leaves the device is shown in the UI before it goes.
+1. **Opt-in AI, local-first direction.** The AI drawer has four modes — chat grounded in the current tab, summarize, web search, and save-as-artifact. Cloud providers (Anthropic today) are opt-in per-provider with keys in the OS keychain, and every call is surfaced in the Network Inspector *before* the request leaves. Ollama integration is next so local becomes the default.
 2. **Radical transparency.** The Network Inspector is a first-class surface — not buried in devtools. It shows every outbound request the browser makes, in real time, grouped by origin. Click a shield next to any origin to block it.
 3. **Assist, don't complete.** The AI is a collaborator, not an agent. It does not click, type, or navigate on your behalf without explicit approval.
 
@@ -26,7 +30,7 @@ This is a personal open-source project. There is no business model. There will n
 Every existing browser that calls itself "privacy-focused" still ships its own telemetry, sells a sync subscription, or bolts privacy features onto a business model that depends on my data being legible somewhere else. I wanted a browser that actually let me **reduce, control, and understand my data footprint** — without having to audit the browser itself to find out.
 
 - **Reduce** — the Network Inspector shows every outbound request in real time, grouped by origin. One click on the shield and future requests to that origin are cancelled. You stop hoping the browser isn't talking behind your back and start watching.
-- **Control** — the AI sidebar defaults to a local model running on your own machine via Ollama. Claude and OpenAI (and any OpenAI-compatible endpoint) are supported as opt-in per-provider, with your own API keys stored in the OS keychain and every cloud call surfaced in the UI before it leaves. The key is yours, the conversations are yours, the bill is yours.
+- **Control** — the AI drawer is designed to default to a local model running on your own machine via Ollama. Cloud providers (Anthropic today; OpenAI and OpenAI-compatible endpoints scaffolded) are opt-in per-provider, with your own API keys stored in the OS keychain and every cloud call surfaced in the UI before it leaves. The key is yours, the conversations are yours, the bill is yours.
 - **Understand** — every piece of state lives in a local SQLite file or localStorage. Bookmarks, history, blocked origins, settings — all inspectable with `sqlite3` or any JSON viewer. Nothing is a remote service you can't open and read.
 
 The AI piece specifically: the modern web is about to route everything through someone else's model, billed to you and observed by them. The bet Null makes is that a modern browser experience should stay **human-driven, not data-driven** — you pick the model, you own the key, the conversations never land on a shared endpoint. Ollama keeps you off the cloud entirely; bring-your-own-Claude/OpenAI keeps you on the cloud only when you've explicitly asked for it. Same tools, same capability, different authority over what leaves your machine.
@@ -92,13 +96,25 @@ Read the full reasoning in [docs/PHILOSOPHY.md](docs/PHILOSOPHY.md).
 - Typography-first layout — section titles and hairline dividers, no card chrome
 - **Appearance** — theme + mode
 - **Privacy** — read-only status rows reflecting the invariants ("Telemetry: off", "Cloud connections: none", "All data: local")
-- **AI** — stubs for Ollama detection + cloud providers (wiring in Milestone 3)
+- **AI** — Anthropic key management + provider status (Ollama detection lands in M5)
 - **About** — app version, repo link, one-line tagline
 
-### AI drawer (scaffold)
-- `⌘/` opens a right-side drawer that narrows the content webview to make room
-- Claude-Code-inspired empty state with an Ollama install hint
-- Input is disabled — real chat lands in Milestone 3 with Ollama detection, cloud provider trait, keychain-stored keys, and a permission broker
+### AI drawer
+
+`⌘/` opens a right-side drawer that narrows the content webview to make room. Four modes, picked from a pill row above the input:
+
+- **Chat** — ask questions about the current tab. The page is extracted once (Mozilla Readability + Turndown), cached for five minutes per tab URL, and sent as context with your question. Single-shot today; conversation history is the next follow-up.
+- **Summarize** — extract → AI → save as a `summary` artifact. Optional "focus" field narrows what the summary emphasizes.
+- **Search** — runs your query against a SearXNG instance you configure on first use. Nothing ships pre-configured (invariant 2). Results render as clickable cards; no AI call.
+- **Save** — extract → save as a `clip` artifact. Zero AI, zero network traffic beyond the page itself.
+
+Artifacts (both `summary` and `clip` rows) get their own view inside the drawer, openable as read-only markdown. They live in SQLite and nothing else.
+
+Every cloud call is recorded to the Network Inspector — `ai:anthropic` for chat and summarize, `search:searxng` for search — *before* the request leaves. Provider keys live in the OS keychain, never in config files. URL query strings are stripped from prompts before they go out so session tokens don't ride along.
+
+Extraction happens inside each tab's own WebView via vendored Readability + Turndown, routed back to Rust through the `null-event://` custom scheme using chunked `Image.src` beacons (not `fetch` — survives strict-CSP sites like Medium, news, docs).
+
+Today: Anthropic for chat/summarize, SearXNG for search. Next: Ollama wired in so local is the default for chat and summarize; Brave Search API as an alternate search provider; conversation history in chat mode.
 
 ### Under the hood
 - Tauri 2 with the `unstable` feature for multi-webview support
@@ -133,7 +149,9 @@ Read the full reasoning in [docs/PHILOSOPHY.md](docs/PHILOSOPHY.md).
 - Xcode Command Line Tools on macOS: `xcode-select --install`
 
 Optional:
-- [Ollama](https://ollama.com) — for local AI inference (not wired yet; lands in Milestone 3)
+- [Ollama](https://ollama.com) — for local AI inference (not wired yet; lands in Milestone 5)
+- An Anthropic API key — for Chat / Summarize modes in the AI drawer today
+- A [SearXNG](https://searxng.org) instance (self-hosted or public) — for Search mode
 
 ### Build and run
 
@@ -186,12 +204,15 @@ null-browser/
 │   ├── Cargo.toml
 │   ├── tauri.conf.json           — window config, bundle identifier (sh.null.browser)
 │   └── src/
-│       ├── lib.rs                — Tauri builder, command registration, custom URI scheme
+│       ├── lib.rs                — Tauri builder, command registration, null-event:// URI scheme
 │       ├── webview/              — tab webview lifecycle (create, hide, show, navigate, resize)
-│       ├── network/              — inspector state, navigation + subresource capture
-│       ├── storage/              — SQLite schema (migrations 001–003) + CRUD for bookmarks / history / blocked origins
-│       ├── commands/             — one file per IPC domain (tabs, bookmarks, history, network, meta)
-│       ├── ai/                   — provider trait + per-vendor stubs (Ollama, Anthropic, OpenAI)
+│       │   ├── extract.rs        — extraction bridge (chunked Image-beacon transport) + per-tab cache
+│       │   └── vendor/           — Readability + Turndown, embedded via include_str!
+│       ├── network/              — inspector state, navigation + subresource capture, AI/search outbound recording
+│       ├── storage/              — SQLite schema (migrations 001–004) + CRUD for bookmarks / history / blocked origins / artifacts / settings
+│       ├── commands/             — one file per IPC domain (tabs, bookmarks, history, network, meta, ai, artifacts, search)
+│       ├── ai/                   — provider dispatcher + keychain-backed key cache + per-vendor modules (Anthropic wired; Ollama, OpenAI scaffolded)
+│       ├── search/               — web search providers (SearXNG today)
 │       ├── permissions/          — approval broker (stub)
 │       ├── settings/             — versioned JSON config (stub)
 │       ├── menu.rs               — native macOS menu with accelerators
@@ -215,13 +236,15 @@ null-browser/
 - **M1.6** — top-bar action cluster (History, Chat, Settings, Profile)
 - **M2 Phase 1** — Network Inspector with main-frame captures
 - **M2 Phase 2** — subresource capture (via injected PerformanceObserver) + per-origin blocking
+- **M3** — bring-your-own AI providers (Anthropic, OS-keychain-stored keys, per-call network visibility)
+- **M4** — AI drawer with chat (page-grounded), summarize, search (SearXNG), save; artifacts persisted to SQLite
 
 ### In progress / next
 - **M2 Phase 3** — subresource blocking via `WKContentRuleList` (native WebKit path — objc2 work) and `WKScriptMessageHandler` to close CSP blind spots
-- **M3** — real AI (Ollama detection, provider trait, keychain keys, permission broker)
+- **M5** — Ollama wired into chat and summarize so local is the default; conversation history; Brave Search alternate provider
 - **Favicons** — fetch once, cache locally, render in tabs and bookmarks
 - **Tab persistence** — restore open tabs on relaunch via SQLite
-- **Personal search** — FTS5 over history/bookmarks so you can search what you've seen, not the whole web
+- **Personal search** — FTS5 over history / bookmarks / artifacts so you can search what you've seen, not the whole web
 
 ### Not on the roadmap
 - Chromium forking (one-person project can't maintain Chromium)
