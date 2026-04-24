@@ -3,9 +3,11 @@ use tauri::{AppHandle, Emitter, Runtime};
 
 pub const PALETTE_EVENT: &str = "palette-set";
 pub const MODE_EVENT: &str = "mode-set";
+pub const BOOKMARK_MENU_EVENT: &str = "bookmark-menu-action";
 
 const PALETTE_PREFIX: &str = "palette:";
 const MODE_PREFIX: &str = "mode:";
+const BOOKMARK_PREFIX: &str = "bmk:";
 
 pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     let app_submenu = Submenu::with_items(
@@ -86,5 +88,14 @@ pub fn handle_event<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
         let _ = app.emit(PALETTE_EVENT, palette);
     } else if let Some(mode) = id.strip_prefix(MODE_PREFIX) {
         let _ = app.emit(MODE_EVENT, mode);
+    } else if let Some(rest) = id.strip_prefix(BOOKMARK_PREFIX) {
+        // id format: bmk:<action>:<bookmark_id>
+        let mut parts = rest.splitn(2, ':');
+        let action = parts.next().unwrap_or("").to_string();
+        let bookmark_id: i64 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+        let _ = app.emit(
+            BOOKMARK_MENU_EVENT,
+            serde_json::json!({ "action": action, "id": bookmark_id }),
+        );
     }
 }

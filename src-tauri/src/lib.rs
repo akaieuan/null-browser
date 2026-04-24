@@ -6,6 +6,7 @@ pub mod dock;
 pub mod menu;
 pub mod network;
 pub mod permissions;
+pub mod search;
 pub mod settings;
 pub mod storage;
 pub mod webview;
@@ -15,22 +16,55 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .register_uri_scheme_protocol("null-event", |ctx, request| {
-            // Beacon endpoint for the injected subresource observer. The
-            // full URL is null-event://log?d=<urlencoded-json>. Parse the
-            // d param and record the event; return 200 with open CORS so
-            // the injected fetch/Image isn't rejected by the page.
+            // One-way tab→Rust beacon, both routes are Image-based GETs.
+            //   null-event://log?d=<urlencoded-json>           — subresource observer
+            //   null-event://artifact?r=<id>&i=<k>&n=<t>&d=<s> — extraction chunk
+            // Both return 200 with open CORS so the injected Image
+            // isn't rejected by the page.
             let uri_str = request.uri().to_string();
             if let Ok(parsed) = Url::parse(&uri_str) {
-                for (k, v) in parsed.query_pairs() {
-                    if k == "d" {
-                        if let Ok(record) = serde_json::from_str::<network::SubresourceRecord>(&v) {
-                            network::record_subresource(
-                                ctx.app_handle(),
-                                &record.url,
-                                &record.initiator,
-                            );
+                match parsed.host_str() {
+                    Some("log") => {
+                        for (k, v) in parsed.query_pairs() {
+                            if k == "d" {
+                                if let Ok(record) =
+                                    serde_json::from_str::<network::SubresourceRecord>(&v)
+                                {
+                                    network::record_subresource(
+                                        ctx.app_handle(),
+                                        &record.url,
+                                        &record.initiator,
+                                    );
+                                }
+                            }
                         }
                     }
+                    Some("artifact") => {
+                        let mut req_id: Option<String> = None;
+                        let mut index: Option<u32> = None;
+                        let mut total: Option<u32> = None;
+                        let mut data: Option<String> = None;
+                        for (k, v) in parsed.query_pairs() {
+                            match k.as_ref() {
+                                "r" => req_id = Some(v.into_owned()),
+                                "i" => index = v.parse().ok(),
+                                "n" => total = v.parse().ok(),
+                                "d" => data = Some(v.into_owned()),
+                                _ => {}
+                            }
+                        }
+                        if let (Some(r), Some(i), Some(n), Some(d)) =
+                            (req_id, index, total, data)
+                        {
+                            if let Some(reg) = ctx
+                                .app_handle()
+                                .try_state::<webview::extract::ExtractRegistry>(
+                            ) {
+                                reg.ingest_chunk(&r, i, n, &d);
+                            }
+                        }
+                    }
+                    _ => {}
                 }
             }
             http::Response::builder()
@@ -44,6 +78,9 @@ pub fn run() {
             dock::set_icon();
             app.manage(storage::Storage::open());
             app.manage(network::NetworkState::default());
+            app.manage(ai::cache::KeyCache::default());
+            app.manage(webview::extract::ExtractRegistry::default());
+            app.manage(webview::extract::ExtractCache::default());
             let menu = menu::build(app.handle())?;
             app.set_menu(menu)?;
             app.on_menu_event(|app_handle, event| {
@@ -66,8 +103,10 @@ pub fn run() {
             commands::bookmarks::list_bookmarks,
             commands::bookmarks::add_bookmark,
             commands::bookmarks::remove_bookmark,
+            commands::bookmarks::update_bookmark,
             commands::bookmarks::remove_bookmark_by_url,
             commands::bookmarks::reorder_bookmarks,
+            commands::bookmarks::show_bookmark_menu,
             commands::history::list_history,
             commands::history::add_history,
             commands::history::remove_history,
@@ -82,6 +121,16 @@ pub fn run() {
             commands::ai::ai_set_key,
             commands::ai::ai_provider_status,
             commands::ai::ai_send,
+            commands::artifacts::list_artifacts,
+            commands::artifacts::get_artifact,
+            commands::artifacts::delete_artifact,
+            commands::artifacts::summarize_current_tab,
+            commands::artifacts::save_current_tab,
+            commands::artifacts::chat_with_page,
+            commands::search::search_get_instance,
+            commands::search::search_set_instance,
+            commands::search::search_clear_instance,
+            commands::search::search_web,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

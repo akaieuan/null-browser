@@ -39,6 +39,20 @@ pub struct BlockedOrigin {
     pub created_at: i64,
 }
 
+/// A saved page summary (or later: other kinds of saved AI outputs).
+/// Lives on disk, openable inside the AI drawer next to chat.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Artifact {
+    pub id: i64,
+    pub kind: String,
+    pub title: String,
+    pub source_url: String,
+    pub source_title: Option<String>,
+    pub markdown: String,
+    pub model: String,
+    pub created_at: i64,
+}
+
 /// Owned handle to the single SQLite connection used by the app.
 ///
 /// Managed via Tauri state so command handlers can acquire it with
@@ -108,6 +122,20 @@ impl Storage {
     pub fn remove_bookmark(&self, id: i64) -> rusqlite::Result<()> {
         let conn = self.conn();
         conn.execute("DELETE FROM bookmarks WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    pub fn update_bookmark(
+        &self,
+        id: i64,
+        url: &str,
+        title: &str,
+    ) -> rusqlite::Result<()> {
+        let conn = self.conn();
+        conn.execute(
+            "UPDATE bookmarks SET url = ?1, title = ?2 WHERE id = ?3",
+            params![url, title, id],
+        )?;
         Ok(())
     }
 
@@ -216,6 +244,111 @@ impl Storage {
             |row| row.get(0),
         )?;
         Ok(count > 0)
+    }
+
+    pub fn insert_artifact(
+        &self,
+        kind: &str,
+        title: &str,
+        source_url: &str,
+        source_title: Option<&str>,
+        markdown: &str,
+        model: &str,
+    ) -> rusqlite::Result<Artifact> {
+        let conn = self.conn();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        conn.execute(
+            "INSERT INTO artifacts (kind, title, source_url, source_title, markdown, model, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![kind, title, source_url, source_title, markdown, model, now],
+        )?;
+        Ok(Artifact {
+            id: conn.last_insert_rowid(),
+            kind: kind.to_string(),
+            title: title.to_string(),
+            source_url: source_url.to_string(),
+            source_title: source_title.map(|s| s.to_string()),
+            markdown: markdown.to_string(),
+            model: model.to_string(),
+            created_at: now,
+        })
+    }
+
+    pub fn list_artifacts(&self) -> rusqlite::Result<Vec<Artifact>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT id, kind, title, source_url, source_title, markdown, model, created_at \
+             FROM artifacts ORDER BY created_at DESC, id DESC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(Artifact {
+                id: row.get(0)?,
+                kind: row.get(1)?,
+                title: row.get(2)?,
+                source_url: row.get(3)?,
+                source_title: row.get(4)?,
+                markdown: row.get(5)?,
+                model: row.get(6)?,
+                created_at: row.get(7)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    pub fn get_artifact(&self, id: i64) -> rusqlite::Result<Artifact> {
+        let conn = self.conn();
+        conn.query_row(
+            "SELECT id, kind, title, source_url, source_title, markdown, model, created_at \
+             FROM artifacts WHERE id = ?1",
+            params![id],
+            |row| {
+                Ok(Artifact {
+                    id: row.get(0)?,
+                    kind: row.get(1)?,
+                    title: row.get(2)?,
+                    source_url: row.get(3)?,
+                    source_title: row.get(4)?,
+                    markdown: row.get(5)?,
+                    model: row.get(6)?,
+                    created_at: row.get(7)?,
+                })
+            },
+        )
+    }
+
+    pub fn delete_artifact(&self, id: i64) -> rusqlite::Result<()> {
+        let conn = self.conn();
+        conn.execute("DELETE FROM artifacts WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    pub fn get_setting(&self, key: &str) -> rusqlite::Result<Option<String>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare("SELECT value FROM settings WHERE key = ?1")?;
+        let mut rows = stmt.query(params![key])?;
+        match rows.next()? {
+            Some(row) => Ok(Some(row.get(0)?)),
+            None => Ok(None),
+        }
+    }
+
+    pub fn set_setting(&self, key: &str, value: &str) -> rusqlite::Result<()> {
+        let conn = self.conn();
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?1, ?2) \
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![key, value],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_setting(&self, key: &str) -> rusqlite::Result<()> {
+        let conn = self.conn();
+        conn.execute("DELETE FROM settings WHERE key = ?1", params![key])?;
+        Ok(())
     }
 }
 

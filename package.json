@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "dev:setup": "./scripts/setup-dev-signing.sh"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
@@ -20,15 +21,19 @@
     "lucide-react": "^1.9.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
     "tailwind-merge": "^3.5.0"
   },
   "devDependencies": {
+    "@mozilla/readability": "^0.6.0",
     "@tailwindcss/vite": "^4.2.4",
     "@tauri-apps/cli": "^2",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^4.6.0",
     "tailwindcss": "^4.2.4",
+    "turndown": "^7.2.4",
     "typescript": "~5.8.3",
     "vite": "^7.0.4"
   }

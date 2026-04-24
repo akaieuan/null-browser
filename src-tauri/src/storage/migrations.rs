@@ -7,7 +7,7 @@
 
 use rusqlite::Connection;
 
-const LATEST: i64 = 3;
+const LATEST: i64 = 4;
 
 pub fn run(conn: &mut Connection) -> rusqlite::Result<()> {
     let current: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
@@ -16,6 +16,7 @@ pub fn run(conn: &mut Connection) -> rusqlite::Result<()> {
             1 => MIGRATION_001,
             2 => MIGRATION_002,
             3 => MIGRATION_003,
+            4 => MIGRATION_004,
             _ => unreachable!("no migration defined for version {version}"),
         };
         let tx = conn.transaction()?;
@@ -68,4 +69,20 @@ const MIGRATION_003: &str = r#"
         origin     TEXT    PRIMARY KEY,
         created_at INTEGER NOT NULL
     );
+"#;
+
+const MIGRATION_004: &str = r#"
+    CREATE TABLE artifacts (
+        id           INTEGER PRIMARY KEY,
+        kind         TEXT    NOT NULL,
+        title        TEXT    NOT NULL,
+        source_url   TEXT    NOT NULL,
+        source_title TEXT,
+        markdown     TEXT    NOT NULL,
+        model        TEXT    NOT NULL,
+        created_at   INTEGER NOT NULL
+    );
+
+    CREATE INDEX artifacts_created_at_idx ON artifacts (created_at DESC);
+    CREATE INDEX artifacts_source_url_idx ON artifacts (source_url);
 "#;

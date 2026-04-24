@@ -16,6 +16,8 @@ use tauri::{
 
 use crate::network;
 
+pub mod extract;
+
 /// Prefix used for all tab webview labels. Keeps them separable from
 /// the `main` webview in the `app.webviews()` map.
 const TAB_PREFIX: &str = "tab-";
@@ -222,6 +224,112 @@ pub fn go_forward(app: &AppHandle, tab_id: &str) -> Result<(), String> {
 
 pub fn reload(app: &AppHandle, tab_id: &str) -> Result<(), String> {
     eval_on(app, tab_id, "location.reload()")
+}
+
+/// The tab's currently-loaded URL, as known to its webview. Used by
+/// the extraction cache to decide whether a cached payload still
+/// matches what the user is looking at.
+pub fn current_tab_url(app: &AppHandle, tab_id: &str) -> Result<String, String> {
+    let label = tab_label(tab_id);
+    let webview = app
+        .get_webview(&label)
+        .ok_or_else(|| format!("tab {tab_id} not found"))?;
+    webview.url().map(|u| u.to_string()).map_err(s)
+}
+
+const READABILITY_JS: &str = include_str!("vendor/readability.js");
+const TURNDOWN_JS: &str = include_str!("vendor/turndown.js");
+
+/// Body of the extraction IIFE. `__NULL_REQ_ID__` is declared as a JS
+/// string literal at the top of the enclosing IIFE (see `run_extract`),
+/// so it's in scope here.
+///
+/// Sends the result back as a sequence of GETs via `new Image()` — NOT
+/// `fetch`. Image hits `img-src` CSP, which real-world article sites
+/// (Medium, news, docs) leave broad; `fetch` hits `connect-src`, which
+/// the same sites routinely restrict to 'self' and silently block the
+/// custom scheme. Mirrors the subresource observer's transport choice.
+///
+/// Chunked to stay under conservative URL length budgets: 1500 chars
+/// of raw JSON → at most ~5 KB URL-encoded, which every WebKit build
+/// handles fine. The page cannot forge a reply because it doesn't
+/// know the current reqId.
+const EXTRACT_GLUE: &str = r#"
+function __null_send(jsonStr) {
+  try {
+    var CHUNK = 1500;
+    var total = Math.max(1, Math.ceil(jsonStr.length / CHUNK));
+    for (var i = 0; i < total; i++) {
+      var part = jsonStr.substr(i * CHUNK, CHUNK);
+      var img = new Image();
+      img.src = 'null-event://artifact?r=' + encodeURIComponent(__NULL_REQ_ID__)
+              + '&i=' + i
+              + '&n=' + total
+              + '&d=' + encodeURIComponent(part);
+    }
+  } catch (err) {}
+}
+try {
+  var doc = document.cloneNode(true);
+  var article = new Readability(doc).parse();
+  if (!article) throw new Error('not-an-article');
+  var td = new TurndownService({ headingStyle: 'atx', codeBlockStyle: 'fenced' });
+  var md = td.turndown(article.content);
+  __null_send(JSON.stringify({
+    title: (article.title || document.title || ''),
+    url: location.href,
+    markdown: md
+  }));
+} catch (e) {
+  __null_send(JSON.stringify({
+    title: (document.title || ''),
+    url: location.href,
+    markdown: '[extraction failed: ' + (e && e.message || 'unknown') + ']'
+  }));
+}
+"#;
+
+/// Inject Readability + Turndown + the extraction glue into the target
+/// tab. The orchestrator in `commands::artifacts::summarize_current_tab`
+/// registers a `reqId` first, then awaits the corresponding payload.
+///
+/// The vendored JS is concatenated inside a single IIFE so that
+/// `Readability` and `TurndownService` stay scoped — they never touch
+/// the page's globals.
+pub fn run_extract(app: &AppHandle, tab_id: &str, req_id: &str) -> Result<(), String> {
+    let req_id_literal = js_string_literal(req_id);
+    let mut script = String::with_capacity(
+        READABILITY_JS.len() + TURNDOWN_JS.len() + EXTRACT_GLUE.len() + 128,
+    );
+    script.push_str("(function(){\n");
+    script.push_str("var __NULL_REQ_ID__ = ");
+    script.push_str(&req_id_literal);
+    script.push_str(";\n");
+    script.push_str(READABILITY_JS);
+    script.push_str("\n;\n");
+    script.push_str(TURNDOWN_JS);
+    script.push_str("\n;\n");
+    script.push_str(EXTRACT_GLUE);
+    script.push_str("\n})();");
+    eval_on(app, tab_id, &script)
+}
+
+fn js_string_literal(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len() + 2);
+    out.push('"');
+    for c in raw.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 /// Wipe per-origin storage on every live tab (cookies, localStorage,

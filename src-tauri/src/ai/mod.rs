@@ -5,6 +5,7 @@
 //! Ollama and cloud providers is transparent to the frontend.
 
 pub mod anthropic;
+pub mod cache;
 pub mod ollama;
 pub mod openai;
 pub mod provider;

@@ -11,6 +11,7 @@ Pre-v0.1. Milestone 0 of [the plan](/Users/ieuanking/.claude/plans/here-is-a-pla
 | Task | Command |
 |---|---|
 | Install JS deps | `npm install` |
+| Dev signing setup (macOS, one-time) | `npm run dev:setup` |
 | Dev (launches desktop window) | `npm run tauri dev` |
 | Build release bundles | `npm run tauri build` |
 | Rust type-check only | `cargo check --manifest-path src-tauri/Cargo.toml` |
@@ -19,6 +20,8 @@ Pre-v0.1. Milestone 0 of [the plan](/Users/ieuanking/.claude/plans/here-is-a-pla
 | Frontend dev server only | `npm run dev` |
 
 Rust toolchain: stable, installed via `rustup`. If `cargo` isn't on `PATH`, run `source ~/.cargo/env` first.
+
+Dev signing (macOS): `npm run dev:setup` creates a self-signed `null-dev` code-signing cert in the login keychain. `tauri dev` then routes through `scripts/cargo-signed.sh`, which codesigns every dev build with a stable designated requirement — so Keychain ACLs for stored provider keys survive rebuilds instead of re-prompting. Skip setup and you'll get a keychain prompt on every Rust rebuild; the wrapper falls through to plain cargo if no cert is present. No-op on Linux/Windows.
 
 There are no tests yet. When they land, update the table. Do not invent commands that don't exist yet — if asked to "run the tests", check the state of the code first.
 

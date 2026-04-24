@@ -1,70 +1,310 @@
-import { ArrowUp, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import {
+  ArrowUp,
+  BookmarkPlus,
+  ChevronLeft,
+  FileText,
+  MessageSquare,
+  Search as SearchIcon,
+  Sparkles,
+  Trash2,
+  X,
+} from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 import { Button } from "@/components/ui/button";
 import { AI_DRAWER_WIDTH } from "@/lib/layout";
-import { Channel, ipc, type ProviderStatus } from "@/lib/ipc";
+import {
+  Channel,
+  ipc,
+  type Artifact,
+  type ArtifactEvent,
+  type ChatEvent,
+  type ProviderStatus,
+  type SearchResult,
+} from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 
 export { AI_DRAWER_WIDTH };
 
 type ConnectionStatus = "disconnected" | "connecting" | "connected";
-type Message = { role: "user" | "assistant" | "error"; content: string };
+
+type Mode = "chat" | "summarize" | "search" | "save";
+
+type Message =
+  | { role: "user"; content: string }
+  | { role: "assistant"; content: string }
+  | { role: "error"; content: string }
+  | { role: "saved"; artifactId: number; title: string }
+  | { role: "status"; content: string }
+  | { role: "search_query"; content: string }
+  | { role: "search_results"; query: string; results: SearchResult[] };
+
+type View = "chat" | "artifacts";
+
+type ActiveTab = { id: string; url: string; title: string } | null;
 
 const DEFAULT_PROVIDER = "anthropic";
 const DEFAULT_MODEL = "claude-sonnet-4-6";
 
-export function AIDrawer({ onClose }: { onClose: () => void }) {
+const MODE_META: Record<
+  Mode,
+  { icon: React.ComponentType<{ size?: number; strokeWidth?: number }>; label: string }
+> = {
+  chat: { icon: MessageSquare, label: "Chat" },
+  summarize: { icon: Sparkles, label: "Summarize" },
+  search: { icon: SearchIcon, label: "Search" },
+  save: { icon: BookmarkPlus, label: "Save" },
+};
+
+const MODES: Mode[] = ["chat", "summarize", "search", "save"];
+
+export function AIDrawer({
+  onClose,
+  activeTab,
+}: {
+  onClose: () => void;
+  activeTab: ActiveTab;
+}) {
   const [status, setStatus] = useState<ProviderStatus | null>(null);
+  const [view, setView] = useState<View>("chat");
+  const [mode, setMode] = useState<Mode>("chat");
   const [messages, setMessages] = useState<Message[]>([]);
   const [draft, setDraft] = useState("");
-  const [pending, setPending] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [artifacts, setArtifacts] = useState<Artifact[]>([]);
+  const [openArtifact, setOpenArtifact] = useState<Artifact | null>(null);
+  const [searchInstance, setSearchInstance] = useState<string | null>(null);
 
   useEffect(() => {
-    ipc.aiProviderStatus().then(setStatus).catch(() => setStatus({ anthropic: false, openai: false }));
+    ipc
+      .aiProviderStatus()
+      .then(setStatus)
+      .catch(() => setStatus({ anthropic: false, openai: false }));
+    ipc
+      .searchGetInstance()
+      .then(setSearchInstance)
+      .catch(() => setSearchInstance(null));
   }, []);
 
+  const refreshArtifacts = useCallback(() => {
+    ipc.listArtifacts().then(setArtifacts).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    refreshArtifacts();
+  }, [refreshArtifacts]);
+
   const hasKey = !!status && (status.anthropic || status.openai);
-  const connStatus: ConnectionStatus = pending
+  const needsKey = mode === "chat" || mode === "summarize";
+  const needsSearchInstance = mode === "search";
+  const needsTab =
+    mode === "summarize" || mode === "save" || (mode === "chat" && false);
+  const connStatus: ConnectionStatus = busy
     ? "connecting"
     : hasKey
       ? "connected"
       : "disconnected";
 
-  const send = async () => {
-    const prompt = draft.trim();
-    if (!prompt || pending || !hasKey) return;
+  const openArtifactById = useCallback(async (id: number) => {
+    try {
+      const a = await ipc.getArtifact(id);
+      setOpenArtifact(a);
+      setView("artifacts");
+    } catch {
+      /* swallow */
+    }
+  }, []);
+
+  const removeArtifact = async (id: number) => {
+    try {
+      await ipc.deleteArtifact(id);
+      setArtifacts((xs) => xs.filter((a) => a.id !== id));
+      if (openArtifact?.id === id) setOpenArtifact(null);
+    } catch {
+      /* swallow */
+    }
+  };
+
+  const doChat = async (prompt: string) => {
     setMessages((m) => [
       ...m,
       { role: "user", content: prompt },
       { role: "assistant", content: "" },
     ]);
     setDraft("");
-    setPending(true);
+    setBusy(true);
 
-    const onChunk = new Channel<string>();
-    onChunk.onmessage = (text) => {
+    try {
+      if (activeTab) {
+        const onEvent = new Channel<ChatEvent>();
+        onEvent.onmessage = (evt) => {
+          if (evt.kind === "grounded") {
+            /* context chip already reflects the live tab */
+          } else if (evt.kind === "chunk") {
+            setMessages((m) => appendAssistantText(m, evt.text));
+          } else if (evt.kind === "done") {
+            /* stream finished */
+          } else if (evt.kind === "error") {
+            setMessages((m) => {
+              const without = dropTrailingEmptyAssistant(m);
+              return [...without, { role: "error", content: evt.message }];
+            });
+          }
+        };
+        await ipc.chatWithPage(
+          activeTab.id,
+          DEFAULT_PROVIDER,
+          DEFAULT_MODEL,
+          prompt,
+          onEvent,
+        );
+      } else {
+        const onChunk = new Channel<string>();
+        onChunk.onmessage = (text) => {
+          setMessages((m) => appendAssistantText(m, text));
+        };
+        await ipc.aiSend(DEFAULT_PROVIDER, DEFAULT_MODEL, prompt, onChunk);
+      }
+    } catch (e) {
       setMessages((m) => {
-        const copy = [...m];
-        const last = copy[copy.length - 1];
-        if (last && last.role === "assistant") {
-          copy[copy.length - 1] = { ...last, content: last.content + text };
-        }
-        return copy;
+        const without = dropTrailingEmptyAssistant(m);
+        return [...without, { role: "error", content: String(e) }];
       });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const doSummarize = async (focus: string) => {
+    if (!activeTab) return;
+    setBusy(true);
+    const preview = focus.trim()
+      ? `Summarizing "${activeTab.title}" with focus on: ${focus.trim()}`
+      : `Summarizing "${activeTab.title}"…`;
+    setMessages((m) => [
+      ...m,
+      { role: "status", content: preview },
+      { role: "assistant", content: "" },
+    ]);
+    setDraft("");
+
+    const onEvent = new Channel<ArtifactEvent>();
+    onEvent.onmessage = (evt) => {
+      if (evt.kind === "extracted") {
+        /* status already shown */
+      } else if (evt.kind === "chunk") {
+        setMessages((m) => appendAssistantText(m, evt.text));
+      } else if (evt.kind === "saved") {
+        ipc
+          .getArtifact(evt.id)
+          .then((a) => {
+            setMessages((m) => [
+              ...m,
+              { role: "saved", artifactId: a.id, title: a.title },
+            ]);
+            refreshArtifacts();
+          })
+          .catch(() => {});
+      } else if (evt.kind === "error") {
+        setMessages((m) => {
+          const without = dropTrailingEmptyAssistant(m);
+          return [...without, { role: "error", content: evt.message }];
+        });
+      }
     };
 
     try {
-      await ipc.aiSend(DEFAULT_PROVIDER, DEFAULT_MODEL, prompt, onChunk);
-    } catch (e) {
-      setMessages((m) => {
-        const copy = m.slice(0, -1);
-        return [...copy, { role: "error", content: String(e) }];
-      });
+      await ipc.summarizeCurrentTab(
+        activeTab.id,
+        DEFAULT_PROVIDER,
+        DEFAULT_MODEL,
+        focus.trim() || null,
+        onEvent,
+      );
+    } catch {
+      /* error event already pushed */
     } finally {
-      setPending(false);
+      setBusy(false);
     }
   };
+
+  const doSave = async () => {
+    if (!activeTab) return;
+    setBusy(true);
+    try {
+      const id = await ipc.saveCurrentTab(activeTab.id);
+      const a = await ipc.getArtifact(id);
+      refreshArtifacts();
+      setOpenArtifact(a);
+      setView("artifacts");
+    } catch (e) {
+      setMessages((m) => [...m, { role: "error", content: String(e) }]);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const doSearch = async (query: string) => {
+    setMessages((m) => [
+      ...m,
+      { role: "search_query", content: query },
+      { role: "status", content: `Searching the web…` },
+    ]);
+    setDraft("");
+    setBusy(true);
+    try {
+      const results = await ipc.searchWeb(query);
+      setMessages((m) => {
+        const without = dropTrailingStatus(m);
+        return [...without, { role: "search_results", query, results }];
+      });
+    } catch (e) {
+      setMessages((m) => {
+        const without = dropTrailingStatus(m);
+        return [...without, { role: "error", content: String(e) }];
+      });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onSend = () => {
+    const text = draft.trim();
+    if (busy) return;
+    if (mode === "chat") {
+      if (!text || !hasKey) return;
+      void doChat(text);
+    } else if (mode === "summarize") {
+      if (!activeTab || !hasKey) return;
+      void doSummarize(draft);
+    } else if (mode === "search") {
+      if (!text || !searchInstance) return;
+      void doSearch(text);
+    } else if (mode === "save") {
+      if (!activeTab) return;
+      void doSave();
+    }
+  };
+
+  const canSend = useMemo(() => {
+    if (busy) return false;
+    if (mode === "chat") return !!draft.trim() && hasKey;
+    if (mode === "summarize") return !!activeTab && hasKey;
+    if (mode === "search") return !!draft.trim() && !!searchInstance;
+    if (mode === "save") return !!activeTab;
+    return false;
+  }, [busy, mode, draft, hasKey, activeTab, searchInstance]);
+
+  const modeBlockedReason = useMemo(() => {
+    if (needsKey && !hasKey) return "Add a provider key to use this mode.";
+    if (needsSearchInstance && !searchInstance) return null; // handled inline
+    if (needsTab && !activeTab) return "Open a page first.";
+    if (mode === "chat" && !activeTab && !hasKey)
+      return "Add a provider key to use this mode.";
+    return null;
+  }, [needsKey, hasKey, needsSearchInstance, searchInstance, needsTab, activeTab, mode]);
 
   return (
     <aside
@@ -73,8 +313,14 @@ export function AIDrawer({ onClose }: { onClose: () => void }) {
     >
       <header className="flex h-11 shrink-0 items-center justify-between px-3">
         <div className="flex items-center gap-2">
-          <span className="text-sm font-medium">Chat</span>
           <StatusDot status={connStatus} />
+          <ViewToggle
+            value={view}
+            onChange={(v) => {
+              setView(v);
+              setOpenArtifact(null);
+            }}
+          />
         </div>
         <Button
           variant="ghost"
@@ -88,49 +334,88 @@ export function AIDrawer({ onClose }: { onClose: () => void }) {
       </header>
 
       <div className="flex-1 overflow-y-auto overflow-x-hidden">
-        {!hasKey ? (
-          <EmptyState onKeySaved={() => ipc.aiProviderStatus().then(setStatus)} />
+        {view === "chat" ? (
+          needsKey && !hasKey ? (
+            <EmptyState
+              onKeySaved={() => ipc.aiProviderStatus().then(setStatus)}
+            />
+          ) : (
+            <ChatLog
+              messages={messages}
+              pending={busy}
+              onOpenArtifact={openArtifactById}
+            />
+          )
+        ) : openArtifact ? (
+          <ArtifactViewer
+            artifact={openArtifact}
+            onBack={() => setOpenArtifact(null)}
+            onDelete={() => removeArtifact(openArtifact.id)}
+          />
         ) : (
-          <ChatLog messages={messages} pending={pending} />
+          <ArtifactList
+            artifacts={artifacts}
+            onOpen={setOpenArtifact}
+            onDelete={removeArtifact}
+          />
         )}
       </div>
 
-      <div className="shrink-0 p-3">
-        {hasKey && (
-          <div className="mb-1.5 px-1 text-[11px] text-subtle">
-            {DEFAULT_PROVIDER} · {DEFAULT_MODEL}
-          </div>
-        )}
-        <div className="rounded-2xl border border-border bg-muted/20 px-3 py-2.5 transition-colors focus-within:border-ring focus-within:bg-muted/40">
-          <textarea
-            disabled={!hasKey || pending}
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                void send();
-              }
-            }}
-            placeholder={hasKey ? "Ask anything" : "Add a provider key to start"}
-            rows={1}
-            className="block w-full resize-none bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none disabled:cursor-not-allowed"
-          />
-          <div className="mt-1.5 flex items-center justify-end">
-            <button
-              type="button"
-              disabled={!hasKey || pending || !draft.trim()}
-              onClick={() => void send()}
-              aria-label="Send"
-              className="flex h-6 w-6 items-center justify-center rounded-full bg-foreground text-background transition-opacity disabled:cursor-not-allowed disabled:opacity-25"
-            >
-              <ArrowUp size={12} strokeWidth={2.5} />
-            </button>
+      {view === "chat" && (
+        <div className="shrink-0 p-3">
+          <ModePicker value={mode} onChange={setMode} />
+          <div className="mt-2">
+            <InputArea
+              mode={mode}
+              draft={draft}
+              setDraft={setDraft}
+              onSend={onSend}
+              canSend={canSend}
+              busy={busy}
+              activeTab={activeTab}
+              hasKey={hasKey}
+              searchInstance={searchInstance}
+              onSearchInstanceChange={setSearchInstance}
+              blockedReason={modeBlockedReason}
+            />
           </div>
         </div>
-      </div>
+      )}
     </aside>
   );
+}
+
+function appendAssistantText(m: Message[], text: string): Message[] {
+  const copy = [...m];
+  const last = copy[copy.length - 1];
+  if (last && last.role === "assistant") {
+    copy[copy.length - 1] = { ...last, content: last.content + text };
+  }
+  return copy;
+}
+
+function dropTrailingEmptyAssistant(m: Message[]): Message[] {
+  const copy = [...m];
+  while (copy.length > 0) {
+    const last = copy[copy.length - 1];
+    if (
+      (last.role === "assistant" && last.content === "") ||
+      last.role === "status"
+    ) {
+      copy.pop();
+      continue;
+    }
+    break;
+  }
+  return copy;
+}
+
+function dropTrailingStatus(m: Message[]): Message[] {
+  const copy = [...m];
+  while (copy.length > 0 && copy[copy.length - 1].role === "status") {
+    copy.pop();
+  }
+  return copy;
 }
 
 function StatusDot({ status }: { status: ConnectionStatus }) {
@@ -138,7 +423,7 @@ function StatusDot({ status }: { status: ConnectionStatus }) {
     status === "connected"
       ? "Connected"
       : status === "connecting"
-        ? "Connecting"
+        ? "Working"
         : "No model connected";
   return (
     <span
@@ -155,11 +440,316 @@ function StatusDot({ status }: { status: ConnectionStatus }) {
   );
 }
 
-function ChatLog({ messages, pending }: { messages: Message[]; pending: boolean }) {
+function ViewToggle({
+  value,
+  onChange,
+}: {
+  value: View;
+  onChange: (v: View) => void;
+}) {
+  return (
+    <div className="flex items-center gap-0.5 rounded-full bg-muted/60 p-0.5 text-xs">
+      {(["chat", "artifacts"] as const).map((v) => (
+        <button
+          key={v}
+          type="button"
+          onClick={() => onChange(v)}
+          className={cn(
+            "rounded-full px-2.5 py-0.5 capitalize transition-colors",
+            value === v
+              ? "bg-background text-foreground shadow-sm"
+              : "text-muted-foreground hover:text-foreground",
+          )}
+        >
+          {v}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function ModePicker({
+  value,
+  onChange,
+}: {
+  value: Mode;
+  onChange: (m: Mode) => void;
+}) {
+  return (
+    <div className="flex items-center gap-0.5 rounded-full border border-border bg-muted/20 p-0.5 text-[11px]">
+      {MODES.map((m) => {
+        const { icon: Icon, label } = MODE_META[m];
+        const active = value === m;
+        return (
+          <button
+            key={m}
+            type="button"
+            onClick={() => onChange(m)}
+            className={cn(
+              "flex flex-1 items-center justify-center gap-1 rounded-full px-2 py-1 transition-colors",
+              active
+                ? "bg-background text-foreground shadow-sm"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            <Icon size={11} strokeWidth={1.75} />
+            <span>{label}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function InputArea({
+  mode,
+  draft,
+  setDraft,
+  onSend,
+  canSend,
+  busy,
+  activeTab,
+  hasKey,
+  searchInstance,
+  onSearchInstanceChange,
+  blockedReason,
+}: {
+  mode: Mode;
+  draft: string;
+  setDraft: (s: string) => void;
+  onSend: () => void;
+  canSend: boolean;
+  busy: boolean;
+  activeTab: ActiveTab;
+  hasKey: boolean;
+  searchInstance: string | null;
+  onSearchInstanceChange: (s: string | null) => void;
+  blockedReason: string | null;
+}) {
+  if (mode === "search" && !searchInstance) {
+    return (
+      <SearchInstanceSetup
+        onSaved={(url) => onSearchInstanceChange(url)}
+      />
+    );
+  }
+
+  if (mode === "save") {
+    return (
+      <div className="flex flex-col gap-1.5">
+        <ProviderLine mode={mode} activeTab={activeTab} />
+        <button
+          type="button"
+          onClick={onSend}
+          disabled={!canSend}
+          className={cn(
+            "flex h-9 w-full items-center justify-center gap-2 rounded-2xl border border-border bg-muted/40 text-sm text-foreground transition-colors",
+            canSend
+              ? "hover:bg-muted"
+              : "cursor-not-allowed opacity-40",
+          )}
+        >
+          <BookmarkPlus size={14} strokeWidth={1.75} />
+          {busy ? "Saving…" : "Save this page"}
+        </button>
+        {blockedReason && (
+          <div className="px-1 text-[11px] text-muted-foreground">
+            {blockedReason}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  const placeholder = placeholderFor(mode, activeTab);
+  const inputDisabled =
+    busy || (mode === "chat" && !hasKey) || (mode === "summarize" && !hasKey);
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      <ProviderLine
+        mode={mode}
+        activeTab={activeTab}
+        searchInstance={searchInstance}
+      />
+      <div className="rounded-2xl border border-border bg-muted/20 px-3 py-2.5 transition-colors focus-within:border-ring focus-within:bg-muted/40">
+        <textarea
+          disabled={inputDisabled}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              onSend();
+            }
+          }}
+          placeholder={placeholder}
+          rows={1}
+          className="block w-full resize-none bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none disabled:cursor-not-allowed"
+        />
+        <div className="mt-1.5 flex items-center justify-end">
+          <button
+            type="button"
+            disabled={!canSend}
+            onClick={onSend}
+            aria-label="Send"
+            className="flex h-6 w-6 items-center justify-center rounded-full bg-foreground text-background transition-opacity disabled:cursor-not-allowed disabled:opacity-25"
+          >
+            <ArrowUp size={12} strokeWidth={2.5} />
+          </button>
+        </div>
+      </div>
+      {blockedReason && (
+        <div className="px-1 text-[11px] text-muted-foreground">
+          {blockedReason}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function placeholderFor(mode: Mode, activeTab: ActiveTab): string {
+  if (mode === "chat") {
+    return activeTab ? "Ask about this page…" : "Ask anything…";
+  }
+  if (mode === "summarize") {
+    return "Focus on… (optional)";
+  }
+  if (mode === "search") {
+    return "Search the web…";
+  }
+  return "";
+}
+
+function ProviderLine({
+  mode,
+  activeTab,
+  searchInstance,
+}: {
+  mode: Mode;
+  activeTab: ActiveTab;
+  searchInstance?: string | null;
+}) {
+  if (mode === "search") {
+    if (!searchInstance) return null;
+    let host = searchInstance;
+    try {
+      host = new URL(searchInstance).hostname;
+    } catch {
+      /* keep raw */
+    }
+    return (
+      <div className="flex items-center justify-between px-1 text-[11px] text-subtle">
+        <span>via {host}</span>
+      </div>
+    );
+  }
+  if (mode === "save") {
+    return (
+      <div className="flex items-center justify-between px-1 text-[11px] text-subtle">
+        <span>local only · no AI</span>
+        {activeTab && <PageChip activeTab={activeTab} />}
+      </div>
+    );
+  }
+  return (
+    <div className="flex items-center justify-between gap-2 px-1 text-[11px] text-subtle">
+      <span className="truncate">
+        {DEFAULT_PROVIDER} · {DEFAULT_MODEL}
+      </span>
+      {mode === "chat" && activeTab && <PageChip activeTab={activeTab} />}
+      {mode === "summarize" && activeTab && <PageChip activeTab={activeTab} />}
+    </div>
+  );
+}
+
+function PageChip({ activeTab }: { activeTab: NonNullable<ActiveTab> }) {
+  const host = useMemo(() => {
+    try {
+      return new URL(activeTab.url).hostname.replace(/^www\./, "");
+    } catch {
+      return activeTab.url;
+    }
+  }, [activeTab.url]);
+  return (
+    <span
+      className="max-w-[55%] truncate text-foreground"
+      title={`Using: ${activeTab.title}\n${activeTab.url}`}
+    >
+      Using: {activeTab.title || host}
+    </span>
+  );
+}
+
+function SearchInstanceSetup({
+  onSaved,
+}: {
+  onSaved: (url: string) => void;
+}) {
+  const [url, setUrl] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const save = async () => {
+    const trimmed = url.trim();
+    if (!trimmed) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await ipc.searchSetInstance(trimmed);
+      onSaved(trimmed);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="flex flex-col gap-2 rounded-2xl border border-border bg-muted/20 p-3 text-xs">
+      <div className="text-foreground">Point at a SearXNG instance</div>
+      <div className="text-muted-foreground">
+        Self-hosted or a public one you trust. Nothing ships pre-configured.
+      </div>
+      <input
+        type="url"
+        autoFocus
+        value={url}
+        onChange={(e) => setUrl(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            void save();
+          }
+        }}
+        placeholder="https://searx.example.com"
+        className="rounded-md border border-border bg-background px-2.5 py-1.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-ring focus:outline-none"
+      />
+      <Button
+        size="sm"
+        onClick={() => void save()}
+        disabled={saving || !url.trim()}
+      >
+        {saving ? "Saving…" : "Save"}
+      </Button>
+      {error && <div className="text-red-500">{error}</div>}
+    </div>
+  );
+}
+
+function ChatLog({
+  messages,
+  pending,
+  onOpenArtifact,
+}: {
+  messages: Message[];
+  pending: boolean;
+  onOpenArtifact: (id: number) => void;
+}) {
   if (messages.length === 0 && !pending) {
     return (
       <div className="flex h-full items-center justify-center px-8 text-center text-sm text-muted-foreground">
-        Ask anything.
+        Pick a mode below and go.
       </div>
     );
   }
@@ -167,6 +757,43 @@ function ChatLog({ messages, pending }: { messages: Message[]; pending: boolean 
     <div className="flex flex-col gap-3 px-3 py-4 text-sm">
       {messages.map((m, i) => {
         const isLast = i === messages.length - 1;
+        if (m.role === "saved") {
+          return (
+            <button
+              key={i}
+              type="button"
+              onClick={() => onOpenArtifact(m.artifactId)}
+              className="flex max-w-[85%] items-center gap-2 self-start rounded-lg border border-border bg-muted/40 px-2.5 py-1.5 text-left text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            >
+              <FileText size={12} strokeWidth={1.5} />
+              <span className="truncate">Saved · {m.title || "Untitled"}</span>
+            </button>
+          );
+        }
+        if (m.role === "status") {
+          return (
+            <div
+              key={i}
+              className="self-start px-1 text-xs text-muted-foreground"
+            >
+              {m.content}
+            </div>
+          );
+        }
+        if (m.role === "search_query") {
+          return (
+            <div
+              key={i}
+              className="max-w-[85%] self-end rounded-2xl bg-muted px-3 py-2 text-foreground"
+            >
+              <span className="text-[11px] text-muted-foreground">Search · </span>
+              {m.content}
+            </div>
+          );
+        }
+        if (m.role === "search_results") {
+          return <SearchResultList key={i} results={m.results} />;
+        }
         const showWaitingDot =
           isLast && pending && m.role === "assistant" && m.content === "";
         return (
@@ -189,6 +816,252 @@ function ChatLog({ messages, pending }: { messages: Message[]; pending: boolean 
       })}
     </div>
   );
+}
+
+function SearchResultList({ results }: { results: SearchResult[] }) {
+  if (results.length === 0) {
+    return (
+      <div className="self-start px-1 text-xs text-muted-foreground">
+        No results.
+      </div>
+    );
+  }
+  return (
+    <div className="flex flex-col gap-2">
+      {results.slice(0, 10).map((r, i) => (
+        <SearchResultCard key={i} result={r} />
+      ))}
+    </div>
+  );
+}
+
+function SearchResultCard({ result }: { result: SearchResult }) {
+  const host = useMemo(() => {
+    try {
+      return new URL(result.url).hostname.replace(/^www\./, "");
+    } catch {
+      return result.url;
+    }
+  }, [result.url]);
+  return (
+    <a
+      href={result.url}
+      target="_blank"
+      rel="noreferrer"
+      className="flex flex-col gap-0.5 rounded-lg border border-border bg-muted/20 px-3 py-2 transition-colors hover:bg-muted/40"
+    >
+      <div className="text-[11px] text-muted-foreground">{host}</div>
+      <div className="truncate text-sm text-foreground">{result.title || result.url}</div>
+      {result.snippet && (
+        <div className="line-clamp-2 text-xs text-muted-foreground">
+          {result.snippet}
+        </div>
+      )}
+    </a>
+  );
+}
+
+function ArtifactList({
+  artifacts,
+  onOpen,
+  onDelete,
+}: {
+  artifacts: Artifact[];
+  onOpen: (a: Artifact) => void;
+  onDelete: (id: number) => void;
+}) {
+  if (artifacts.length === 0) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-2 px-8 text-center text-sm text-muted-foreground">
+        <div className="text-foreground">No artifacts yet.</div>
+        <div className="text-xs">
+          Switch to <span className="text-foreground">Summarize</span> or{" "}
+          <span className="text-foreground">Save</span> below to capture a page.
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="flex flex-col">
+      {artifacts.map((a) => (
+        <ArtifactRow
+          key={a.id}
+          artifact={a}
+          onOpen={() => onOpen(a)}
+          onDelete={() => onDelete(a.id)}
+        />
+      ))}
+    </div>
+  );
+}
+
+function ArtifactRow({
+  artifact,
+  onOpen,
+  onDelete,
+}: {
+  artifact: Artifact;
+  onOpen: () => void;
+  onDelete: () => void;
+}) {
+  const host = useMemo(() => {
+    try {
+      return new URL(artifact.source_url).hostname.replace(/^www\./, "");
+    } catch {
+      return artifact.source_url;
+    }
+  }, [artifact.source_url]);
+  const when = useMemo(() => relativeTime(artifact.created_at), [artifact.created_at]);
+  const kindLabel = artifact.kind === "clip" ? "Clip" : "Summary";
+  return (
+    <div className="group flex items-start gap-2 border-b border-border px-3 py-2.5 hover:bg-muted/30">
+      <button
+        type="button"
+        onClick={onOpen}
+        className="flex min-w-0 flex-1 flex-col items-start text-left"
+      >
+        <div className="w-full truncate text-sm text-foreground">
+          {artifact.title || "Untitled"}
+        </div>
+        <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+          <span>{kindLabel}</span>
+          <span>·</span>
+          <span className="truncate">{host}</span>
+          <span>·</span>
+          <span>{when}</span>
+        </div>
+      </button>
+      <button
+        type="button"
+        onClick={onDelete}
+        aria-label="Delete artifact"
+        className="shrink-0 rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground group-hover:opacity-100"
+      >
+        <Trash2 size={13} strokeWidth={1.5} />
+      </button>
+    </div>
+  );
+}
+
+function ArtifactViewer({
+  artifact,
+  onBack,
+  onDelete,
+}: {
+  artifact: Artifact;
+  onBack: () => void;
+  onDelete: () => void;
+}) {
+  return (
+    <div className="flex h-full flex-col">
+      <div className="flex shrink-0 items-center gap-1 border-b border-border px-1.5 py-1.5">
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label="Back"
+          onClick={onBack}
+          className="h-7 w-7"
+        >
+          <ChevronLeft size={14} strokeWidth={1.5} />
+        </Button>
+        <div className="min-w-0 flex-1 px-1">
+          <div className="truncate text-sm text-foreground">
+            {artifact.title || "Untitled"}
+          </div>
+          <a
+            href={artifact.source_url}
+            target="_blank"
+            rel="noreferrer"
+            className="block truncate text-[11px] text-muted-foreground hover:text-foreground"
+          >
+            {artifact.source_url}
+          </a>
+        </div>
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label="Delete"
+          onClick={onDelete}
+          className="h-7 w-7"
+        >
+          <Trash2 size={13} strokeWidth={1.5} />
+        </Button>
+      </div>
+      <div className="flex-1 overflow-y-auto px-4 py-4 text-sm leading-relaxed">
+        <ReactMarkdown
+          remarkPlugins={[remarkGfm]}
+          components={markdownComponents}
+        >
+          {artifact.markdown}
+        </ReactMarkdown>
+      </div>
+    </div>
+  );
+}
+
+const markdownComponents = {
+  h1: (props: React.HTMLProps<HTMLHeadingElement>) => (
+    <h1 className="mb-2 mt-4 text-lg font-semibold text-foreground" {...props} />
+  ),
+  h2: (props: React.HTMLProps<HTMLHeadingElement>) => (
+    <h2 className="mb-2 mt-4 text-base font-semibold text-foreground" {...props} />
+  ),
+  h3: (props: React.HTMLProps<HTMLHeadingElement>) => (
+    <h3 className="mb-1.5 mt-3 text-sm font-semibold text-foreground" {...props} />
+  ),
+  p: (props: React.HTMLProps<HTMLParagraphElement>) => (
+    <p className="mb-3 text-foreground" {...props} />
+  ),
+  ul: (props: React.HTMLProps<HTMLUListElement>) => (
+    <ul className="mb-3 ml-5 list-disc space-y-1" {...props} />
+  ),
+  ol: (props: React.OlHTMLAttributes<HTMLOListElement>) => (
+    <ol className="mb-3 ml-5 list-decimal space-y-1" {...props} />
+  ),
+  li: (props: React.HTMLProps<HTMLLIElement>) => (
+    <li className="text-foreground" {...props} />
+  ),
+  blockquote: (props: React.HTMLProps<HTMLQuoteElement>) => (
+    <blockquote
+      className="mb-3 border-l-2 border-border pl-3 text-muted-foreground"
+      {...props}
+    />
+  ),
+  code: ({
+    inline,
+    ...props
+  }: React.HTMLProps<HTMLElement> & { inline?: boolean }) =>
+    inline ? (
+      <code
+        className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]"
+        {...props}
+      />
+    ) : (
+      <code className="block font-mono text-[0.85em]" {...props} />
+    ),
+  pre: (props: React.HTMLProps<HTMLPreElement>) => (
+    <pre
+      className="mb-3 overflow-x-auto rounded-md bg-muted p-3 text-xs"
+      {...props}
+    />
+  ),
+  a: (props: React.HTMLProps<HTMLAnchorElement>) => (
+    <a
+      target="_blank"
+      rel="noreferrer"
+      className="text-foreground underline underline-offset-2 hover:no-underline"
+      {...props}
+    />
+  ),
+};
+
+function relativeTime(epochSec: number): string {
+  const diff = Math.max(0, Date.now() / 1000 - epochSec);
+  if (diff < 60) return "just now";
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+  if (diff < 604800) return `${Math.floor(diff / 86400)}d ago`;
+  return new Date(epochSec * 1000).toLocaleDateString();
 }
 
 function EmptyState({ onKeySaved }: { onKeySaved: () => void }) {

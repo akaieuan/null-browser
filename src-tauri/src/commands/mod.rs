@@ -4,8 +4,10 @@
 //! One file per domain so the full IPC surface is auditable at a glance.
 
 pub mod ai;
+pub mod artifacts;
 pub mod bookmarks;
 pub mod history;
 pub mod meta;
 pub mod network;
+pub mod search;
 pub mod tabs;

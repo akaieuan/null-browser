@@ -162,6 +162,40 @@ pub fn record_subresource(app: &AppHandle, url_str: &str, initiator: &str) {
     }
 }
 
+/// Record an outbound AI provider call for the inspector. Called from
+/// every command that's about to hit a cloud AI endpoint, so "every
+/// outbound connection is visible" (invariant 4) holds for AI traffic.
+pub fn record_ai_outbound(app: &AppHandle, provider: &str, endpoint: &str) {
+    record_outbound(app, &format!("ai:{provider}"), endpoint);
+}
+
+/// Record an outbound search provider call. The URL logged is the
+/// endpoint root, not the fully-parameterized query URL — the query
+/// itself is user data that we don't mirror to inspector history.
+pub fn record_search_outbound(app: &AppHandle, provider: &str, endpoint: &str) {
+    record_outbound(app, &format!("search:{provider}"), endpoint);
+}
+
+fn record_outbound(app: &AppHandle, kind: &str, endpoint: &str) {
+    let Ok(url) = Url::parse(endpoint) else {
+        return;
+    };
+    let event = NetworkEvent {
+        id: 0,
+        tab_id: None,
+        url: url.to_string(),
+        origin: origin_of(&url),
+        kind: kind.to_string(),
+        blocked: false,
+        at: now_secs(),
+    };
+    if let Some(state) = app.try_state::<NetworkState>() {
+        if let Some(recorded) = state.record(event) {
+            let _ = app.emit_to(EventTarget::webview("main"), NETWORK_EVENT, &recorded);
+        }
+    }
+}
+
 /// Capture a main-frame navigation for the inspector and broadcast it to
 /// the main webview. Returns `true` if the navigation should proceed,
 /// `false` if it hit a blocked origin and should be cancelled.

@@ -61,6 +61,7 @@ const PROGRESS_BAR_HEIGHT = 2;
 // clip it. Matches w-80 card + outer padding.
 const PROFILE_STRIP_WIDTH = 336;
 
+
 // With `titleBarStyle: Overlay` on macOS, the traffic lights are drawn on top
 // of our custom top bar in the top-left. Pad so nothing lands under them.
 const isMac =
@@ -393,6 +394,61 @@ function App() {
       setBookmarks((prev) => [...prev, created]);
     }
   }, [activeTab, activeBookmark]);
+
+  const deleteBookmark = useCallback(async (id: number) => {
+    await ipc.removeBookmark(id);
+    setBookmarks((prev) => prev.filter((b) => b.id !== id));
+  }, []);
+
+  const [editingBookmark, setEditingBookmark] = useState<Bookmark | null>(null);
+
+  const openBookmarkMenu = useCallback(
+    (e: React.MouseEvent, id: number) => {
+      e.preventDefault();
+      ipc.showBookmarkMenu(id).catch(() => {});
+    },
+    [],
+  );
+
+  const saveBookmarkEdit = useCallback(
+    async (id: number, url: string, title: string) => {
+      await ipc.updateBookmark(id, url, title);
+      setBookmarks((prev) =>
+        prev.map((b) => (b.id === id ? { ...b, url, title } : b)),
+      );
+    },
+    [],
+  );
+
+  // Native bookmark context-menu actions. The Rust side builds the OS
+  // menu, pops it up, and emits this event with the chosen action + id.
+  useEffect(() => {
+    const promise = listen<{ action: string; id: number }>(
+      "bookmark-menu-action",
+      (e) => {
+        const { action, id } = e.payload;
+        const target = bookmarks.find((b) => b.id === id);
+        if (!target) return;
+        switch (action) {
+          case "open_new_tab":
+            openNewTab(target.url).catch(() => {});
+            break;
+          case "edit":
+            setEditingBookmark(target);
+            break;
+          case "copy_url":
+            navigator.clipboard.writeText(target.url).catch(() => {});
+            break;
+          case "delete":
+            deleteBookmark(id).catch(() => {});
+            break;
+        }
+      },
+    );
+    return () => {
+      promise.then((off) => off());
+    };
+  }, [bookmarks, openNewTab, deleteBookmark]);
 
   const toggleHistory = useCallback(() => {
     setShowSettings(false);
@@ -730,6 +786,7 @@ function App() {
                   key={b.id}
                   bookmark={b}
                   onClick={() => navigateTo(b.url)}
+                  onContextMenu={(e) => openBookmarkMenu(e, b.id)}
                 />
               ))}
             </SortableContext>
@@ -745,6 +802,18 @@ function App() {
             </DragOverlay>
           </DndContext>
         </div>
+      )}
+
+      {editingBookmark && (
+        <BookmarkEditPanel
+          bookmark={editingBookmark}
+          onSave={(url, title) => {
+            const { id } = editingBookmark;
+            setEditingBookmark(null);
+            saveBookmarkEdit(id, url, title).catch(() => {});
+          }}
+          onClose={() => setEditingBookmark(null)}
+        />
       )}
 
       {/* Thin progress strip. Always reserved so starting a load doesn't
@@ -802,7 +871,16 @@ function App() {
             />
           )}
         </div>
-        {showAiDrawer && <AIDrawer onClose={() => setShowAiDrawer(false)} />}
+        {showAiDrawer && (
+          <AIDrawer
+            onClose={() => setShowAiDrawer(false)}
+            activeTab={
+              activeTab && activeTab.hasWebview
+                ? { id: activeTab.id, url: activeTab.url, title: activeTab.title }
+                : null
+            }
+          />
+        )}
       </div>
     </div>
   );
@@ -850,17 +928,121 @@ function TabPill({
   );
 }
 
+function BookmarkEditPanel({
+  bookmark,
+  onSave,
+  onClose,
+}: {
+  bookmark: Bookmark;
+  onSave: (url: string, title: string) => void;
+  onClose: () => void;
+}) {
+  const [name, setName] = useState(bookmark.title);
+  const [url, setUrl] = useState(bookmark.url);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const firstInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    firstInputRef.current?.focus();
+    firstInputRef.current?.select();
+  }, []);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    const onPointer = (e: PointerEvent) => {
+      if (!panelRef.current) return;
+      if (!panelRef.current.contains(e.target as Node)) onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("pointerdown", onPointer, true);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("pointerdown", onPointer, true);
+    };
+  }, [onClose]);
+
+  const save = () => {
+    const trimmedUrl = url.trim();
+    const trimmedName = name.trim() || trimmedUrl;
+    if (!trimmedUrl) return;
+    onSave(trimmedUrl, trimmedName);
+  };
+
+  return (
+    <div
+      ref={panelRef}
+      role="dialog"
+      data-tauri-drag-region="false"
+      className="fixed left-1/2 top-20 z-50 w-[360px] -translate-x-1/2 rounded-lg border border-border bg-background p-3 text-[13px] text-foreground shadow-lg"
+    >
+      <div className="mb-2 text-xs font-medium text-muted-foreground">
+        Edit bookmark
+      </div>
+      <label className="mb-2 block">
+        <span className="mb-1 block text-[11px] uppercase tracking-wide text-muted-foreground">
+          Name
+        </span>
+        <input
+          ref={firstInputRef}
+          type="text"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") save();
+          }}
+          className="w-full rounded border border-border bg-muted/40 px-2 py-1 text-foreground outline-none focus:border-foreground/40"
+        />
+      </label>
+      <label className="mb-3 block">
+        <span className="mb-1 block text-[11px] uppercase tracking-wide text-muted-foreground">
+          URL
+        </span>
+        <input
+          type="text"
+          value={url}
+          onChange={(e) => setUrl(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") save();
+          }}
+          className="w-full rounded border border-border bg-muted/40 px-2 py-1 text-foreground outline-none focus:border-foreground/40"
+        />
+      </label>
+      <div className="flex justify-end gap-2">
+        <button
+          type="button"
+          onClick={onClose}
+          className="rounded px-2 py-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          onClick={save}
+          className="rounded bg-foreground px-2 py-1 text-background hover:opacity-90"
+        >
+          Save
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function BookmarkBarItem({
   bookmark,
   onClick,
+  onContextMenu,
 }: {
   bookmark: Bookmark;
   onClick: () => void;
+  onContextMenu?: (e: React.MouseEvent) => void;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
+      onContextMenu={onContextMenu}
       title={bookmark.url}
       className="flex h-6 max-w-[180px] shrink-0 items-center rounded px-2 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
     >
@@ -872,9 +1054,11 @@ function BookmarkBarItem({
 function SortableBookmarkBarItem({
   bookmark,
   onClick,
+  onContextMenu,
 }: {
   bookmark: Bookmark;
   onClick: () => void;
+  onContextMenu?: (e: React.MouseEvent) => void;
 }) {
   const {
     attributes,
@@ -899,7 +1083,11 @@ function SortableBookmarkBarItem({
       {...attributes}
       {...listeners}
     >
-      <BookmarkBarItem bookmark={bookmark} onClick={onClick} />
+      <BookmarkBarItem
+        bookmark={bookmark}
+        onClick={onClick}
+        onContextMenu={onContextMenu}
+      />
     </div>
   );
 }

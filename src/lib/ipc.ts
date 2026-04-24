@@ -34,6 +34,35 @@ export type ProviderStatus = {
   openai: boolean;
 };
 
+export type Artifact = {
+  id: number;
+  kind: string;
+  title: string;
+  source_url: string;
+  source_title: string | null;
+  markdown: string;
+  model: string;
+  created_at: number;
+};
+
+export type ArtifactEvent =
+  | { kind: "extracted"; title: string; url: string }
+  | { kind: "chunk"; text: string }
+  | { kind: "saved"; id: number }
+  | { kind: "error"; message: string };
+
+export type ChatEvent =
+  | { kind: "grounded"; title: string; url: string }
+  | { kind: "chunk"; text: string }
+  | { kind: "done" }
+  | { kind: "error"; message: string };
+
+export type SearchResult = {
+  title: string;
+  url: string;
+  snippet: string;
+};
+
 export const ipc = {
   getAppVersion: () => invoke<string>("get_app_version"),
 
@@ -57,10 +86,14 @@ export const ipc = {
   addBookmark: (url: string, title: string) =>
     invoke<Bookmark>("add_bookmark", { url, title }),
   removeBookmark: (id: number) => invoke<void>("remove_bookmark", { id }),
+  updateBookmark: (id: number, url: string, title: string) =>
+    invoke<void>("update_bookmark", { id, url, title }),
   removeBookmarkByUrl: (url: string) =>
     invoke<void>("remove_bookmark_by_url", { url }),
   reorderBookmarks: (orderedIds: number[]) =>
     invoke<void>("reorder_bookmarks", { orderedIds }),
+  showBookmarkMenu: (id: number) =>
+    invoke<void>("show_bookmark_menu", { id }),
 
   listHistory: (limit?: number) =>
     invoke<HistoryEntry[]>("list_history", { limit }),
@@ -91,6 +124,47 @@ export const ipc = {
     prompt: string,
     onChunk: Channel<string>,
   ) => invoke<string>("ai_send", { provider, model, prompt, onChunk }),
+
+  listArtifacts: () => invoke<Artifact[]>("list_artifacts"),
+  getArtifact: (id: number) => invoke<Artifact>("get_artifact", { id }),
+  deleteArtifact: (id: number) => invoke<void>("delete_artifact", { id }),
+  summarizeCurrentTab: (
+    tabId: string,
+    provider: string,
+    model: string,
+    focus: string | null,
+    onEvent: Channel<ArtifactEvent>,
+  ) =>
+    invoke<number>("summarize_current_tab", {
+      tabId,
+      provider,
+      model,
+      focus,
+      onEvent,
+    }),
+  saveCurrentTab: (tabId: string) =>
+    invoke<number>("save_current_tab", { tabId }),
+  chatWithPage: (
+    tabId: string,
+    provider: string,
+    model: string,
+    prompt: string,
+    onEvent: Channel<ChatEvent>,
+  ) =>
+    invoke<string>("chat_with_page", {
+      tabId,
+      provider,
+      model,
+      prompt,
+      onEvent,
+    }),
+
+  searchGetInstance: () => invoke<string | null>("search_get_instance"),
+  searchSetInstance: (url: string) =>
+    invoke<void>("search_set_instance", { url }),
+  searchClearInstance: () => invoke<void>("search_clear_instance"),
+  searchWeb: (query: string) =>
+    invoke<SearchResult[]>("search_web", { query }),
 };
 
 export { Channel };
