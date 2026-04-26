@@ -12,7 +12,7 @@ use serde::Serialize;
 use tauri::ipc::Channel;
 use tauri::{AppHandle, State};
 
-use crate::ai::{anthropic, cache::KeyCache};
+use crate::ai::{cache::KeyCache, dispatch};
 use crate::network::record_ai_outbound;
 use crate::storage::{Artifact, Storage};
 use crate::webview;
@@ -64,8 +64,8 @@ pub async fn summarize_current_tab(
     focus: Option<String>,
     on_event: Channel<ArtifactEvent>,
 ) -> Result<i64, String> {
-    let key = match require_provider_key(&cache, &provider) {
-        Ok(k) => k,
+    let endpoint = match dispatch::endpoint_for(&provider) {
+        Ok(e) => e,
         Err(msg) => {
             let _ = on_event.send(ArtifactEvent::Error {
                 message: msg.clone(),
@@ -87,7 +87,7 @@ pub async fn summarize_current_tab(
         url: payload.url.clone(),
     });
 
-    record_ai_outbound(&app, &provider, anthropic::ENDPOINT);
+    record_ai_outbound(&app, &provider, endpoint);
 
     let focus_line = match focus.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         Some(f) => format!("Focus on: {f}\n\n"),
@@ -103,7 +103,7 @@ pub async fn summarize_current_tab(
         body = payload.markdown,
     );
 
-    let summary = match anthropic::send_stream(&key, &model, &prompt, |text| {
+    let summary = match dispatch::send_stream(&cache, &provider, &model, &prompt, |text| {
         let _ = on_event.send(ArtifactEvent::Chunk {
             text: text.to_string(),
         });
@@ -173,8 +173,8 @@ pub async fn chat_with_page(
     prompt: String,
     on_event: Channel<ChatEvent>,
 ) -> Result<String, String> {
-    let key = match require_provider_key(&cache, &provider) {
-        Ok(k) => k,
+    let endpoint = match dispatch::endpoint_for(&provider) {
+        Ok(e) => e,
         Err(msg) => {
             let _ = on_event.send(ChatEvent::Error {
                 message: msg.clone(),
@@ -211,7 +211,7 @@ pub async fn chat_with_page(
         url: payload.url.clone(),
     });
 
-    record_ai_outbound(&app, &provider, anthropic::ENDPOINT);
+    record_ai_outbound(&app, &provider, endpoint);
 
     let full_prompt = format!(
         "You are answering questions about this web page. Use it as your \
@@ -224,7 +224,7 @@ pub async fn chat_with_page(
         q = prompt,
     );
 
-    let answer = match anthropic::send_stream(&key, &model, &full_prompt, |text| {
+    let answer = match dispatch::send_stream(&cache, &provider, &model, &full_prompt, |text| {
         let _ = on_event.send(ChatEvent::Chunk {
             text: text.to_string(),
         });
@@ -240,15 +240,4 @@ pub async fn chat_with_page(
 
     let _ = on_event.send(ChatEvent::Done);
     Ok(answer)
-}
-
-fn require_provider_key(cache: &KeyCache, provider: &str) -> Result<String, String> {
-    if provider != "anthropic" {
-        return Err(format!("provider not implemented: {provider}"));
-    }
-    match cache.get(provider) {
-        Ok(Some(k)) => Ok(k),
-        Ok(None) => Err(format!("no key stored for {provider}")),
-        Err(e) => Err(e),
-    }
 }

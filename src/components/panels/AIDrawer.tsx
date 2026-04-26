@@ -1,6 +1,7 @@
 import {
   ArrowUp,
   BookmarkPlus,
+  ChevronDown,
   ChevronLeft,
   FileText,
   MessageSquare,
@@ -9,7 +10,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -21,6 +22,7 @@ import {
   type Artifact,
   type ArtifactEvent,
   type ChatEvent,
+  type OllamaStatus,
   type ProviderStatus,
   type SearchResult,
 } from "@/lib/ipc";
@@ -45,8 +47,73 @@ type View = "chat" | "artifacts";
 
 type ActiveTab = { id: string; url: string; title: string } | null;
 
-const DEFAULT_PROVIDER = "anthropic";
-const DEFAULT_MODEL = "claude-sonnet-4-6";
+const ANTHROPIC_DEFAULT_MODEL = "claude-sonnet-4-6";
+
+// Ollama is the local default. Anthropic is the cloud fallback when no
+// daemon is running and a key is set. Order matters — `pickDefault`
+// walks providers and picks the first one that's actually usable.
+type ProviderId = "ollama" | "anthropic";
+
+const PROVIDER_PREF_KEY = "null:ai:provider";
+const MODEL_PREF_KEY = "null:ai:model";
+
+function readSavedProvider(): ProviderId | null {
+  try {
+    const v = localStorage.getItem(PROVIDER_PREF_KEY);
+    return v === "ollama" || v === "anthropic" ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+function readSavedModel(): string | null {
+  try {
+    return localStorage.getItem(MODEL_PREF_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function persistChoice(provider: ProviderId, model: string) {
+  try {
+    localStorage.setItem(PROVIDER_PREF_KEY, provider);
+    localStorage.setItem(MODEL_PREF_KEY, model);
+  } catch {
+    /* swallow — choices fall back to detection on next launch */
+  }
+}
+
+function pickDefault(
+  ollama: OllamaStatus | null,
+  status: ProviderStatus | null,
+): { provider: ProviderId; model: string } | null {
+  const savedProvider = readSavedProvider();
+  const savedModel = readSavedModel();
+
+  // Honor a saved choice if it's still usable.
+  if (savedProvider === "ollama" && ollama?.running && ollama.models.length) {
+    const stillThere = ollama.models.find((m) => m.name === savedModel);
+    return {
+      provider: "ollama",
+      model: stillThere?.name ?? ollama.models[0].name,
+    };
+  }
+  if (savedProvider === "anthropic" && status?.anthropic) {
+    return {
+      provider: "anthropic",
+      model: savedModel || ANTHROPIC_DEFAULT_MODEL,
+    };
+  }
+
+  // No usable saved choice — default to local if available.
+  if (ollama?.running && ollama.models.length > 0) {
+    return { provider: "ollama", model: ollama.models[0].name };
+  }
+  if (status?.anthropic) {
+    return { provider: "anthropic", model: ANTHROPIC_DEFAULT_MODEL };
+  }
+  return null;
+}
 
 const MODE_META: Record<
   Mode,
@@ -68,6 +135,9 @@ export function AIDrawer({
   activeTab: ActiveTab;
 }) {
   const [status, setStatus] = useState<ProviderStatus | null>(null);
+  const [ollama, setOllama] = useState<OllamaStatus | null>(null);
+  const [provider, setProvider] = useState<ProviderId | null>(null);
+  const [model, setModel] = useState<string>("");
   const [view, setView] = useState<View>("chat");
   const [mode, setMode] = useState<Mode>("chat");
   const [messages, setMessages] = useState<Message[]>([]);
@@ -77,16 +147,41 @@ export function AIDrawer({
   const [openArtifact, setOpenArtifact] = useState<Artifact | null>(null);
   const [searchInstance, setSearchInstance] = useState<string | null>(null);
 
+  const refreshProviders = useCallback(async () => {
+    try {
+      const [s, o] = await Promise.all([
+        ipc.aiProviderStatus(),
+        ipc
+          .aiOllamaStatus()
+          .catch(() => ({ running: false, models: [] }) as OllamaStatus),
+      ]);
+      setStatus(s);
+      setOllama(o);
+      const picked = pickDefault(o, s);
+      if (picked) {
+        // Only auto-pick if user hasn't already chosen — never silently
+        // change provider/model out from under an in-flight conversation.
+        setProvider((cur) => cur ?? picked.provider);
+        setModel((cur) => cur || picked.model);
+      }
+    } catch {
+      setStatus({ anthropic: false, openai: false, ollama: false });
+      setOllama({ running: false, models: [] });
+    }
+  }, []);
+
   useEffect(() => {
-    ipc
-      .aiProviderStatus()
-      .then(setStatus)
-      .catch(() => setStatus({ anthropic: false, openai: false }));
+    void refreshProviders();
     ipc
       .searchGetInstance()
       .then(setSearchInstance)
       .catch(() => setSearchInstance(null));
-  }, []);
+  }, [refreshProviders]);
+
+  // Persist any user-driven change so it survives a relaunch.
+  useEffect(() => {
+    if (provider && model) persistChoice(provider, model);
+  }, [provider, model]);
 
   const refreshArtifacts = useCallback(() => {
     ipc.listArtifacts().then(setArtifacts).catch(() => {});
@@ -96,14 +191,23 @@ export function AIDrawer({
     refreshArtifacts();
   }, [refreshArtifacts]);
 
-  const hasKey = !!status && (status.anthropic || status.openai);
-  const needsKey = mode === "chat" || mode === "summarize";
+  // "Ready" means we have a usable provider+model for AI modes. Ollama
+  // running without any installed models still counts as not-ready —
+  // the daemon can't answer with no model loaded.
+  const hasOllama =
+    !!ollama?.running && ollama.models.length > 0;
+  const hasAnyKey =
+    !!status && (status.anthropic || status.openai);
+  const aiReady = hasOllama || hasAnyKey;
+  const providerReady =
+    !!provider && !!model && (provider !== "anthropic" || !!status?.anthropic);
+  const needsAi = mode === "chat" || mode === "summarize";
   const needsSearchInstance = mode === "search";
   const needsTab =
     mode === "summarize" || mode === "save" || (mode === "chat" && false);
   const connStatus: ConnectionStatus = busy
     ? "connecting"
-    : hasKey
+    : providerReady
       ? "connected"
       : "disconnected";
 
@@ -128,6 +232,7 @@ export function AIDrawer({
   };
 
   const doChat = async (prompt: string) => {
+    if (!provider || !model) return;
     setMessages((m) => [
       ...m,
       { role: "user", content: prompt },
@@ -153,19 +258,13 @@ export function AIDrawer({
             });
           }
         };
-        await ipc.chatWithPage(
-          activeTab.id,
-          DEFAULT_PROVIDER,
-          DEFAULT_MODEL,
-          prompt,
-          onEvent,
-        );
+        await ipc.chatWithPage(activeTab.id, provider, model, prompt, onEvent);
       } else {
         const onChunk = new Channel<string>();
         onChunk.onmessage = (text) => {
           setMessages((m) => appendAssistantText(m, text));
         };
-        await ipc.aiSend(DEFAULT_PROVIDER, DEFAULT_MODEL, prompt, onChunk);
+        await ipc.aiSend(provider, model, prompt, onChunk);
       }
     } catch (e) {
       setMessages((m) => {
@@ -216,10 +315,11 @@ export function AIDrawer({
     };
 
     try {
+      if (!provider || !model) return;
       await ipc.summarizeCurrentTab(
         activeTab.id,
-        DEFAULT_PROVIDER,
-        DEFAULT_MODEL,
+        provider,
+        model,
         focus.trim() || null,
         onEvent,
       );
@@ -274,10 +374,10 @@ export function AIDrawer({
     const text = draft.trim();
     if (busy) return;
     if (mode === "chat") {
-      if (!text || !hasKey) return;
+      if (!text || !providerReady) return;
       void doChat(text);
     } else if (mode === "summarize") {
-      if (!activeTab || !hasKey) return;
+      if (!activeTab || !providerReady) return;
       void doSummarize(draft);
     } else if (mode === "search") {
       if (!text || !searchInstance) return;
@@ -290,21 +390,23 @@ export function AIDrawer({
 
   const canSend = useMemo(() => {
     if (busy) return false;
-    if (mode === "chat") return !!draft.trim() && hasKey;
-    if (mode === "summarize") return !!activeTab && hasKey;
+    if (mode === "chat") return !!draft.trim() && providerReady;
+    if (mode === "summarize") return !!activeTab && providerReady;
     if (mode === "search") return !!draft.trim() && !!searchInstance;
     if (mode === "save") return !!activeTab;
     return false;
-  }, [busy, mode, draft, hasKey, activeTab, searchInstance]);
+  }, [busy, mode, draft, providerReady, activeTab, searchInstance]);
 
   const modeBlockedReason = useMemo(() => {
-    if (needsKey && !hasKey) return "Add a provider key to use this mode.";
+    if (needsAi && !providerReady) {
+      return aiReady
+        ? "Pick a provider and model to use this mode."
+        : "Run Ollama or add a provider key to use this mode.";
+    }
     if (needsSearchInstance && !searchInstance) return null; // handled inline
     if (needsTab && !activeTab) return "Open a page first.";
-    if (mode === "chat" && !activeTab && !hasKey)
-      return "Add a provider key to use this mode.";
     return null;
-  }, [needsKey, hasKey, needsSearchInstance, searchInstance, needsTab, activeTab, mode]);
+  }, [needsAi, providerReady, aiReady, needsSearchInstance, searchInstance, needsTab, activeTab]);
 
   return (
     <aside
@@ -335,9 +437,10 @@ export function AIDrawer({
 
       <div className="flex-1 overflow-y-auto overflow-x-hidden">
         {view === "chat" ? (
-          needsKey && !hasKey ? (
+          needsAi && !aiReady ? (
             <EmptyState
-              onKeySaved={() => ipc.aiProviderStatus().then(setStatus)}
+              ollama={ollama}
+              onKeySaved={() => void refreshProviders()}
             />
           ) : (
             <ChatLog
@@ -373,7 +476,15 @@ export function AIDrawer({
               canSend={canSend}
               busy={busy}
               activeTab={activeTab}
-              hasKey={hasKey}
+              providerReady={providerReady}
+              provider={provider}
+              model={model}
+              ollama={ollama}
+              status={status}
+              onProviderModelChange={(p, m) => {
+                setProvider(p);
+                setModel(m);
+              }}
               searchInstance={searchInstance}
               onSearchInstanceChange={setSearchInstance}
               blockedReason={modeBlockedReason}
@@ -509,7 +620,12 @@ function InputArea({
   canSend,
   busy,
   activeTab,
-  hasKey,
+  providerReady,
+  provider,
+  model,
+  ollama,
+  status,
+  onProviderModelChange,
   searchInstance,
   onSearchInstanceChange,
   blockedReason,
@@ -521,7 +637,12 @@ function InputArea({
   canSend: boolean;
   busy: boolean;
   activeTab: ActiveTab;
-  hasKey: boolean;
+  providerReady: boolean;
+  provider: ProviderId | null;
+  model: string;
+  ollama: OllamaStatus | null;
+  status: ProviderStatus | null;
+  onProviderModelChange: (provider: ProviderId, model: string) => void;
   searchInstance: string | null;
   onSearchInstanceChange: (s: string | null) => void;
   blockedReason: string | null;
@@ -537,7 +658,15 @@ function InputArea({
   if (mode === "save") {
     return (
       <div className="flex flex-col gap-1.5">
-        <ProviderLine mode={mode} activeTab={activeTab} />
+        <ProviderLine
+          mode={mode}
+          activeTab={activeTab}
+          provider={provider}
+          model={model}
+          ollama={ollama}
+          status={status}
+          onProviderModelChange={onProviderModelChange}
+        />
         <button
           type="button"
           onClick={onSend}
@@ -563,7 +692,8 @@ function InputArea({
 
   const placeholder = placeholderFor(mode, activeTab);
   const inputDisabled =
-    busy || (mode === "chat" && !hasKey) || (mode === "summarize" && !hasKey);
+    busy ||
+    ((mode === "chat" || mode === "summarize") && !providerReady);
 
   return (
     <div className="flex flex-col gap-1.5">
@@ -571,6 +701,11 @@ function InputArea({
         mode={mode}
         activeTab={activeTab}
         searchInstance={searchInstance}
+        provider={provider}
+        model={model}
+        ollama={ollama}
+        status={status}
+        onProviderModelChange={onProviderModelChange}
       />
       <div className="rounded-2xl border border-border bg-muted/20 px-3 py-2.5 transition-colors focus-within:border-ring focus-within:bg-muted/40">
         <textarea
@@ -625,10 +760,20 @@ function ProviderLine({
   mode,
   activeTab,
   searchInstance,
+  provider,
+  model,
+  ollama,
+  status,
+  onProviderModelChange,
 }: {
   mode: Mode;
   activeTab: ActiveTab;
   searchInstance?: string | null;
+  provider: ProviderId | null;
+  model: string;
+  ollama: OllamaStatus | null;
+  status: ProviderStatus | null;
+  onProviderModelChange: (provider: ProviderId, model: string) => void;
 }) {
   if (mode === "search") {
     if (!searchInstance) return null;
@@ -654,11 +799,128 @@ function ProviderLine({
   }
   return (
     <div className="flex items-center justify-between gap-2 px-1 text-[11px] text-subtle">
-      <span className="truncate">
-        {DEFAULT_PROVIDER} · {DEFAULT_MODEL}
-      </span>
-      {mode === "chat" && activeTab && <PageChip activeTab={activeTab} />}
-      {mode === "summarize" && activeTab && <PageChip activeTab={activeTab} />}
+      <ProviderPicker
+        provider={provider}
+        model={model}
+        ollama={ollama}
+        status={status}
+        onChange={onProviderModelChange}
+      />
+      {(mode === "chat" || mode === "summarize") && activeTab && (
+        <PageChip activeTab={activeTab} />
+      )}
+    </div>
+  );
+}
+
+function ProviderPicker({
+  provider,
+  model,
+  ollama,
+  status,
+  onChange,
+}: {
+  provider: ProviderId | null;
+  model: string;
+  ollama: OllamaStatus | null;
+  status: ProviderStatus | null;
+  onChange: (provider: ProviderId, model: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDocClick = (e: MouseEvent) => {
+      if (!wrapRef.current?.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, [open]);
+
+  const ollamaModels = ollama?.running ? ollama.models : [];
+  const anthropicAvailable = !!status?.anthropic;
+  const noOptions = ollamaModels.length === 0 && !anthropicAvailable;
+
+  const label = provider && model ? `${provider} · ${model}` : "no provider";
+
+  return (
+    <div ref={wrapRef} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        disabled={noOptions}
+        className={cn(
+          "flex max-w-[220px] items-center gap-1 rounded-full px-1.5 py-0.5 text-[11px] transition-colors",
+          noOptions
+            ? "cursor-not-allowed text-subtle"
+            : "text-foreground hover:bg-muted/60",
+        )}
+        title={noOptions ? "Run Ollama or add a provider key" : "Switch provider / model"}
+      >
+        <span className="truncate">{label}</span>
+        {!noOptions && <ChevronDown size={10} strokeWidth={1.75} />}
+      </button>
+      {open && !noOptions && (
+        <div className="absolute bottom-full left-0 z-10 mb-1 w-56 overflow-hidden rounded-lg border border-border bg-background shadow-lg">
+          {ollamaModels.length > 0 && (
+            <div className="border-b border-border last:border-b-0">
+              <div className="px-2.5 pt-2 text-[10px] uppercase tracking-wider text-subtle">
+                Ollama · local
+              </div>
+              <div className="py-1">
+                {ollamaModels.map((m) => {
+                  const active = provider === "ollama" && model === m.name;
+                  return (
+                    <button
+                      key={m.name}
+                      type="button"
+                      onClick={() => {
+                        onChange("ollama", m.name);
+                        setOpen(false);
+                      }}
+                      className={cn(
+                        "flex w-full items-center justify-between px-2.5 py-1 text-left text-xs transition-colors",
+                        active
+                          ? "bg-muted text-foreground"
+                          : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+                      )}
+                    >
+                      <span className="truncate">{m.name}</span>
+                      {active && <span className="text-[10px]">●</span>}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+          {anthropicAvailable && (
+            <div>
+              <div className="px-2.5 pt-2 text-[10px] uppercase tracking-wider text-subtle">
+                Anthropic · cloud
+              </div>
+              <div className="py-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    onChange("anthropic", ANTHROPIC_DEFAULT_MODEL);
+                    setOpen(false);
+                  }}
+                  className={cn(
+                    "flex w-full items-center justify-between px-2.5 py-1 text-left text-xs transition-colors",
+                    provider === "anthropic"
+                      ? "bg-muted text-foreground"
+                      : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+                  )}
+                >
+                  <span className="truncate">{ANTHROPIC_DEFAULT_MODEL}</span>
+                  {provider === "anthropic" && <span className="text-[10px]">●</span>}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -1064,7 +1326,13 @@ function relativeTime(epochSec: number): string {
   return new Date(epochSec * 1000).toLocaleDateString();
 }
 
-function EmptyState({ onKeySaved }: { onKeySaved: () => void }) {
+function EmptyState({
+  ollama,
+  onKeySaved,
+}: {
+  ollama: OllamaStatus | null;
+  onKeySaved: () => void;
+}) {
   const [showForm, setShowForm] = useState(false);
   const [keyInput, setKeyInput] = useState("");
   const [saving, setSaving] = useState(false);
@@ -1087,62 +1355,85 @@ function EmptyState({ onKeySaved }: { onKeySaved: () => void }) {
     }
   };
 
+  // Three distinct empty states, in priority order:
+  //   1. Ollama running but no models — install one with `ollama pull`
+  //   2. Ollama not running — install + run it (the local-first path)
+  //   3. Both unavailable — same as (2), but offer Anthropic key as fallback
+  const ollamaRunningNoModels =
+    !!ollama?.running && ollama.models.length === 0;
+
   return (
     <div className="flex h-full flex-col items-center justify-center px-8 text-center">
       <div className="text-[11px] uppercase tracking-[0.2em] text-subtle">
         local first
       </div>
-      <div className="mt-3 text-sm leading-relaxed text-muted-foreground">
-        Run Ollama models or add provider keys.
-      </div>
-      <div className="mt-5 flex items-center gap-4 text-xs">
-        <a
-          href="https://ollama.com"
-          target="_blank"
-          rel="noreferrer"
-          className="text-foreground underline-offset-4 hover:underline"
-        >
-          Install Ollama
-        </a>
-        <span className="text-subtle">·</span>
-        <button
-          type="button"
-          onClick={() => setShowForm((v) => !v)}
-          className="text-muted-foreground hover:text-foreground"
-        >
-          {showForm ? "Cancel" : "Add provider key"}
-        </button>
-      </div>
-
-      {showForm && (
-        <div className="mt-5 flex w-full max-w-xs flex-col gap-2">
-          <input
-            type="password"
-            autoFocus
-            value={keyInput}
-            onChange={(e) => setKeyInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                void save();
-              }
-            }}
-            placeholder="sk-ant-…"
-            className="rounded-md border border-border bg-muted/20 px-2.5 py-1.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-ring focus:outline-none"
-          />
-          <Button
-            size="sm"
-            onClick={() => void save()}
-            disabled={saving || !keyInput.trim()}
-          >
-            {saving ? "Saving…" : "Save Anthropic key"}
-          </Button>
-          <div className="text-[11px] leading-relaxed text-subtle">
-            Stored in your OS keychain. Never written to disk or sent anywhere
-            except api.anthropic.com when you send a message.
+      {ollamaRunningNoModels ? (
+        <>
+          <div className="mt-3 text-sm leading-relaxed text-muted-foreground">
+            Ollama is running but no models are installed.
           </div>
-          {error && <div className="text-xs text-red-500">{error}</div>}
-        </div>
+          <div className="mt-5 rounded-md border border-border bg-muted/20 px-3 py-2 font-mono text-[11px] text-foreground">
+            ollama pull llama3.2
+          </div>
+          <div className="mt-3 text-[11px] text-subtle">
+            Reopen this drawer once a model is installed.
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="mt-3 text-sm leading-relaxed text-muted-foreground">
+            Run Ollama locally — or add a cloud-provider key.
+          </div>
+          <div className="mt-5 flex items-center gap-4 text-xs">
+            <a
+              href="https://ollama.com/download"
+              target="_blank"
+              rel="noreferrer"
+              className="text-foreground underline-offset-4 hover:underline"
+            >
+              Install Ollama
+            </a>
+            <span className="text-subtle">·</span>
+            <button
+              type="button"
+              onClick={() => setShowForm((v) => !v)}
+              className="text-muted-foreground hover:text-foreground"
+            >
+              {showForm ? "Cancel" : "Add Anthropic key"}
+            </button>
+          </div>
+
+          {showForm && (
+            <div className="mt-5 flex w-full max-w-xs flex-col gap-2">
+              <input
+                type="password"
+                autoFocus
+                value={keyInput}
+                onChange={(e) => setKeyInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    void save();
+                  }
+                }}
+                placeholder="sk-ant-…"
+                className="rounded-md border border-border bg-muted/20 px-2.5 py-1.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-ring focus:outline-none"
+              />
+              <Button
+                size="sm"
+                onClick={() => void save()}
+                disabled={saving || !keyInput.trim()}
+              >
+                {saving ? "Saving…" : "Save Anthropic key"}
+              </Button>
+              <div className="text-[11px] leading-relaxed text-subtle">
+                Stored in your OS keychain. Never written to disk or sent
+                anywhere except api.anthropic.com when you send a message.
+              </div>
+              {error && <div className="text-xs text-red-500">{error}</div>}
+            </div>
+          )}
+        </>
       )}
     </div>
   );

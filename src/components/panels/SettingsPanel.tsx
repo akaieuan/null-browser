@@ -1,8 +1,12 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Moon, Sun } from "lucide-react";
 
 import { PanelHeader } from "@/components/panels/PanelHeader";
-import { ipc } from "@/lib/ipc";
+import {
+  ipc,
+  type OllamaStatus,
+  type ProviderStatus,
+} from "@/lib/ipc";
 import { PALETTES, useTheme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 
@@ -150,10 +154,113 @@ function PrivacySection() {
 }
 
 function AISection() {
+  const [providers, setProviders] = useState<ProviderStatus | null>(null);
+  const [ollama, setOllama] = useState<OllamaStatus | null>(null);
+  const [keyDraft, setKeyDraft] = useState("");
+  const [savingKey, setSavingKey] = useState(false);
+  const [keyError, setKeyError] = useState<string | null>(null);
+
+  const refresh = useCallback(() => {
+    ipc.aiProviderStatus().then(setProviders).catch(() => {});
+    ipc
+      .aiOllamaStatus()
+      .then(setOllama)
+      .catch(() => setOllama({ running: false, models: [] }));
+  }, []);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  const ollamaLabel = (() => {
+    if (!ollama) return "checking…";
+    if (!ollama.running) return "not detected";
+    if (ollama.models.length === 0) return "running · no models installed";
+    const n = ollama.models.length;
+    return `running · ${n} model${n === 1 ? "" : "s"}`;
+  })();
+
+  const saveKey = async () => {
+    const k = keyDraft.trim();
+    if (!k) return;
+    setSavingKey(true);
+    setKeyError(null);
+    try {
+      await ipc.aiSetKey("anthropic", k);
+      setKeyDraft("");
+      refresh();
+    } catch (e) {
+      setKeyError(String(e));
+    } finally {
+      setSavingKey(false);
+    }
+  };
+
   return (
     <Section title="AI">
-      <Row label="Local model via Ollama">not detected</Row>
-      <Row label="Cloud providers">none</Row>
+      <Row label="Local model via Ollama">{ollamaLabel}</Row>
+      {ollama?.running && ollama.models.length > 0 && (
+        <Row label="Installed models">
+          <span className="truncate text-right" title={ollama.models.map((m) => m.name).join(", ")}>
+            {ollama.models.map((m) => m.name).join(", ")}
+          </span>
+        </Row>
+      )}
+      {!ollama?.running && (
+        <Row label="Install Ollama">
+          <a
+            href="https://ollama.com/download"
+            target="_blank"
+            rel="noreferrer"
+            className="underline-offset-2 hover:text-foreground hover:underline"
+          >
+            ollama.com/download
+          </a>
+        </Row>
+      )}
+      <Row label="Anthropic">
+        {providers?.anthropic ? (
+          <span>key set</span>
+        ) : (
+          <div className="flex items-center gap-2">
+            <input
+              type="password"
+              placeholder="sk-ant-…"
+              value={keyDraft}
+              onChange={(e) => setKeyDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void saveKey();
+              }}
+              className="h-7 w-44 rounded border border-border bg-background px-2 text-xs text-foreground outline-none focus:border-foreground"
+            />
+            <button
+              type="button"
+              onClick={() => void saveKey()}
+              disabled={savingKey || !keyDraft.trim()}
+              className={cn(
+                "h-7 rounded border border-border px-2 text-xs",
+                savingKey || !keyDraft.trim()
+                  ? "text-muted-foreground"
+                  : "text-foreground hover:bg-muted",
+              )}
+            >
+              {savingKey ? "saving…" : "save"}
+            </button>
+          </div>
+        )}
+      </Row>
+      {keyError && (
+        <Row label=" ">
+          <span className="text-red-500">{keyError}</span>
+        </Row>
+      )}
+      <Row label="Default routing">
+        {ollama?.running
+          ? "local · Ollama"
+          : providers?.anthropic
+            ? "cloud · Anthropic (opt-in)"
+            : "none"}
+      </Row>
     </Section>
   );
 }

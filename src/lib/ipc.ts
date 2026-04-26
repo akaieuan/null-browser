@@ -32,6 +32,16 @@ export type BlockedOrigin = {
 export type ProviderStatus = {
   anthropic: boolean;
   openai: boolean;
+  ollama: boolean;
+};
+
+export type OllamaModel = {
+  name: string;
+};
+
+export type OllamaStatus = {
+  running: boolean;
+  models: OllamaModel[];
 };
 
 export type Artifact = {
@@ -118,6 +128,7 @@ export const ipc = {
   aiSetKey: (provider: string, key: string) =>
     invoke<void>("ai_set_key", { provider, key }),
   aiProviderStatus: () => invoke<ProviderStatus>("ai_provider_status"),
+  aiOllamaStatus: () => invoke<OllamaStatus>("ai_ollama_status"),
   aiSend: (
     provider: string,
     model: string,

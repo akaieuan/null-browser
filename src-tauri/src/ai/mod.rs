@@ -6,6 +6,7 @@
 
 pub mod anthropic;
 pub mod cache;
+pub mod dispatch;
 pub mod ollama;
 pub mod openai;
 pub mod provider;

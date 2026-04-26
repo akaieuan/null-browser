@@ -1,21 +1,26 @@
-//! AI router commands: store provider keys, run cloud calls.
+//! AI router commands: store provider keys, probe local Ollama,
+//! run streaming completions.
 //!
-//! Every cloud call is recorded in the network inspector before the
-//! request leaves the device, honoring the "every outbound connection
-//! is visible" invariant. Keys are stored in the OS keychain and never
-//! returned to the frontend.
+//! Every call leaving the device is recorded in the network inspector
+//! before the request goes out, honoring "every outbound connection is
+//! visible". Cloud-provider keys live in the OS keychain and are never
+//! returned to the frontend. Ollama is treated as keyless — no key
+//! lookup, no failure when no key is stored, but its calls are still
+//! logged (origin `127.0.0.1:11434`, kind `ai:ollama`) so the user can
+//! see that a chat happened, even when nothing left the machine.
 
 use serde::Serialize;
 use tauri::ipc::Channel;
 use tauri::{AppHandle, State};
 
-use crate::ai::{anthropic, cache::KeyCache};
+use crate::ai::{cache::KeyCache, dispatch, ollama};
 use crate::network::record_ai_outbound;
 
 #[derive(Serialize)]
 pub struct ProviderStatus {
     pub anthropic: bool,
     pub openai: bool,
+    pub ollama: bool,
 }
 
 #[tauri::command]
@@ -28,11 +33,18 @@ pub fn ai_set_key(cache: State<KeyCache>, provider: String, key: String) -> Resu
 }
 
 #[tauri::command]
-pub fn ai_provider_status(cache: State<KeyCache>) -> Result<ProviderStatus, String> {
+pub async fn ai_provider_status(cache: State<'_, KeyCache>) -> Result<ProviderStatus, String> {
+    let ollama_status = ollama::status().await;
     Ok(ProviderStatus {
         anthropic: cache.get("anthropic")?.is_some(),
         openai: cache.get("openai")?.is_some(),
+        ollama: ollama_status.running,
     })
+}
+
+#[tauri::command]
+pub async fn ai_ollama_status() -> Result<ollama::OllamaStatus, String> {
+    Ok(ollama::status().await)
 }
 
 #[tauri::command]
@@ -44,24 +56,10 @@ pub async fn ai_send(
     prompt: String,
     on_chunk: Channel<String>,
 ) -> Result<String, String> {
-    let key = cache
-        .get(&provider)?
-        .ok_or_else(|| format!("no key stored for {provider}"))?;
-
-    let endpoint = match provider.as_str() {
-        "anthropic" => anthropic::ENDPOINT,
-        _ => return Err(format!("provider not implemented: {provider}")),
-    };
-
+    let endpoint = dispatch::endpoint_for(&provider)?;
     record_ai_outbound(&app, &provider, endpoint);
-
-    match provider.as_str() {
-        "anthropic" => {
-            anthropic::send_stream(&key, &model, &prompt, |text| {
-                let _ = on_chunk.send(text.to_string());
-            })
-            .await
-        }
-        _ => Err(format!("provider not implemented: {provider}")),
-    }
+    dispatch::send_stream(&cache, &provider, &model, &prompt, |text| {
+        let _ = on_chunk.send(text.to_string());
+    })
+    .await
 }

@@ -118,6 +118,7 @@ pub fn run() {
             commands::network::list_blocked_origins,
             commands::ai::ai_set_key,
             commands::ai::ai_provider_status,
+            commands::ai::ai_ollama_status,
             commands::ai::ai_send,
             commands::artifacts::list_artifacts,
             commands::artifacts::get_artifact,
