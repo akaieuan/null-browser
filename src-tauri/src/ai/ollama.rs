@@ -18,7 +18,8 @@ use std::time::Duration;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 
-pub const HOST: &str = "http://127.0.0.1:11434";
+use crate::ai::dispatch::ChatTurn;
+
 pub const CHAT_ENDPOINT: &str = "http://127.0.0.1:11434/api/chat";
 pub const TAGS_ENDPOINT: &str = "http://127.0.0.1:11434/api/tags";
 
@@ -99,16 +100,23 @@ pub async fn status() -> OllamaStatus {
 ///
 /// NDJSON transport (newline-delimited JSON), distinct from Anthropic's
 /// SSE. Each line is a complete `{message: {content}, done}` object.
-pub async fn send_stream<F>(model: &str, prompt: &str, mut on_text: F) -> Result<String, String>
+pub async fn send_stream<F>(
+    model: &str,
+    turns: &[ChatTurn<'_>],
+    mut on_text: F,
+) -> Result<String, String>
 where
     F: FnMut(&str),
 {
     let body = ChatRequest {
         model,
-        messages: vec![ChatMessage {
-            role: "user",
-            content: prompt,
-        }],
+        messages: turns
+            .iter()
+            .map(|t| ChatMessage {
+                role: t.role,
+                content: t.content,
+            })
+            .collect(),
         stream: true,
     };
 

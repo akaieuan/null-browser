@@ -7,6 +7,8 @@
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 
+use crate::ai::dispatch::ChatTurn;
+
 pub const ENDPOINT: &str = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 
@@ -40,10 +42,15 @@ struct Delta {
 
 /// Stream a completion from Anthropic, calling `on_text` with each text
 /// delta as it arrives. Returns the full assembled response on completion.
+///
+/// `turns` is the conversation history including the new user turn —
+/// the caller is responsible for appending the new user message before
+/// calling. The Anthropic API requires a strictly alternating
+/// user/assistant sequence ending in a user turn.
 pub async fn send_stream<F>(
     key: &str,
     model: &str,
-    prompt: &str,
+    turns: &[ChatTurn<'_>],
     mut on_text: F,
 ) -> Result<String, String>
 where
@@ -53,10 +60,13 @@ where
         model,
         max_tokens: 1024,
         stream: true,
-        messages: vec![Message {
-            role: "user",
-            content: prompt,
-        }],
+        messages: turns
+            .iter()
+            .map(|t| Message {
+                role: t.role,
+                content: t.content,
+            })
+            .collect(),
     };
 
     let res = reqwest::Client::new()

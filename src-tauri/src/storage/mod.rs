@@ -53,6 +53,32 @@ pub struct Artifact {
     pub created_at: i64,
 }
 
+/// A chat thread. Optionally pinned to a page (URL + title captured at
+/// the start of the conversation). All turns of the chat live in
+/// `messages` and reference this row via `conversation_id`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Conversation {
+    pub id: i64,
+    pub title: String,
+    pub page_url: Option<String>,
+    pub page_title: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+/// One turn in a chat thread. Provider/model recorded so the user can
+/// see — when scrolling back — which model gave each answer.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatMessage {
+    pub id: i64,
+    pub conversation_id: i64,
+    pub role: String,
+    pub content: String,
+    pub provider: Option<String>,
+    pub model: Option<String>,
+    pub created_at: i64,
+}
+
 /// Owned handle to the single SQLite connection used by the app.
 ///
 /// Managed via Tauri state so command handlers can acquire it with
@@ -345,6 +371,153 @@ impl Storage {
         conn.execute("DELETE FROM settings WHERE key = ?1", params![key])?;
         Ok(())
     }
+
+    // -------------------------------------------------------------- chats
+
+    pub fn create_conversation(
+        &self,
+        title: &str,
+        page_url: Option<&str>,
+        page_title: Option<&str>,
+    ) -> rusqlite::Result<Conversation> {
+        let conn = self.conn();
+        let now = now_unix();
+        conn.execute(
+            "INSERT INTO conversations (title, page_url, page_title, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?4)",
+            params![title, page_url, page_title, now],
+        )?;
+        Ok(Conversation {
+            id: conn.last_insert_rowid(),
+            title: title.to_string(),
+            page_url: page_url.map(|s| s.to_string()),
+            page_title: page_title.map(|s| s.to_string()),
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    pub fn list_conversations(&self) -> rusqlite::Result<Vec<Conversation>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT id, title, page_url, page_title, created_at, updated_at \
+             FROM conversations ORDER BY updated_at DESC, id DESC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(Conversation {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                page_url: row.get(2)?,
+                page_title: row.get(3)?,
+                created_at: row.get(4)?,
+                updated_at: row.get(5)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    pub fn get_conversation(&self, id: i64) -> rusqlite::Result<Conversation> {
+        let conn = self.conn();
+        conn.query_row(
+            "SELECT id, title, page_url, page_title, created_at, updated_at \
+             FROM conversations WHERE id = ?1",
+            params![id],
+            |row| {
+                Ok(Conversation {
+                    id: row.get(0)?,
+                    title: row.get(1)?,
+                    page_url: row.get(2)?,
+                    page_title: row.get(3)?,
+                    created_at: row.get(4)?,
+                    updated_at: row.get(5)?,
+                })
+            },
+        )
+    }
+
+    pub fn rename_conversation(&self, id: i64, title: &str) -> rusqlite::Result<()> {
+        let conn = self.conn();
+        conn.execute(
+            "UPDATE conversations SET title = ?1, updated_at = ?2 WHERE id = ?3",
+            params![title, now_unix(), id],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_conversation(&self, id: i64) -> rusqlite::Result<()> {
+        let conn = self.conn();
+        // FK ON DELETE CASCADE drops messages too — but rusqlite ships
+        // with foreign_keys OFF by default. Belt-and-braces: drop
+        // messages first, then the row, in one transaction.
+        let mut conn = conn;
+        let tx = conn.transaction()?;
+        tx.execute(
+            "DELETE FROM messages WHERE conversation_id = ?1",
+            params![id],
+        )?;
+        tx.execute("DELETE FROM conversations WHERE id = ?1", params![id])?;
+        tx.commit()
+    }
+
+    pub fn list_messages(&self, conversation_id: i64) -> rusqlite::Result<Vec<ChatMessage>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT id, conversation_id, role, content, provider, model, created_at \
+             FROM messages WHERE conversation_id = ?1 ORDER BY created_at ASC, id ASC",
+        )?;
+        let rows = stmt.query_map(params![conversation_id], |row| {
+            Ok(ChatMessage {
+                id: row.get(0)?,
+                conversation_id: row.get(1)?,
+                role: row.get(2)?,
+                content: row.get(3)?,
+                provider: row.get(4)?,
+                model: row.get(5)?,
+                created_at: row.get(6)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    pub fn append_message(
+        &self,
+        conversation_id: i64,
+        role: &str,
+        content: &str,
+        provider: Option<&str>,
+        model: Option<&str>,
+    ) -> rusqlite::Result<ChatMessage> {
+        let mut conn = self.conn();
+        let now = now_unix();
+        let tx = conn.transaction()?;
+        tx.execute(
+            "INSERT INTO messages (conversation_id, role, content, provider, model, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![conversation_id, role, content, provider, model, now],
+        )?;
+        let id = tx.last_insert_rowid();
+        tx.execute(
+            "UPDATE conversations SET updated_at = ?1 WHERE id = ?2",
+            params![now, conversation_id],
+        )?;
+        tx.commit()?;
+        Ok(ChatMessage {
+            id,
+            conversation_id,
+            role: role.to_string(),
+            content: content.to_string(),
+            provider: provider.map(|s| s.to_string()),
+            model: model.map(|s| s.to_string()),
+            created_at: now,
+        })
+    }
+}
+
+fn now_unix() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 fn db_path() -> PathBuf {

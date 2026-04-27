@@ -5,6 +5,7 @@ import {
   ChevronLeft,
   FileText,
   MessageSquare,
+  Plus,
   Search as SearchIcon,
   Sparkles,
   Trash2,
@@ -22,6 +23,7 @@ import {
   type Artifact,
   type ArtifactEvent,
   type ChatEvent,
+  type Conversation,
   type OllamaStatus,
   type ProviderStatus,
   type SearchResult,
@@ -43,7 +45,7 @@ type Message =
   | { role: "search_query"; content: string }
   | { role: "search_results"; query: string; results: SearchResult[] };
 
-type View = "chat" | "artifacts";
+type View = "chat" | "history" | "artifacts";
 
 type ActiveTab = { id: string; url: string; title: string } | null;
 
@@ -146,6 +148,8 @@ export function AIDrawer({
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const [openArtifact, setOpenArtifact] = useState<Artifact | null>(null);
   const [searchInstance, setSearchInstance] = useState<string | null>(null);
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [conversationId, setConversationId] = useState<number | null>(null);
 
   const refreshProviders = useCallback(async () => {
     try {
@@ -187,9 +191,58 @@ export function AIDrawer({
     ipc.listArtifacts().then(setArtifacts).catch(() => {});
   }, []);
 
+  const refreshConversations = useCallback(() => {
+    ipc.chatListConversations().then(setConversations).catch(() => {});
+  }, []);
+
   useEffect(() => {
     refreshArtifacts();
-  }, [refreshArtifacts]);
+    refreshConversations();
+  }, [refreshArtifacts, refreshConversations]);
+
+  // Load a saved conversation into the chat log. Used by the History
+  // view; switches the drawer back to the chat view as a side effect so
+  // the user lands where they expect.
+  const loadConversation = useCallback(async (id: number) => {
+    try {
+      const rows = await ipc.chatGetMessages(id);
+      const loaded: Message[] = rows.map((r) =>
+        r.role === "user"
+          ? { role: "user", content: r.content }
+          : { role: "assistant", content: r.content },
+      );
+      setMessages(loaded);
+      setConversationId(id);
+      setView("chat");
+    } catch {
+      /* swallow — surface a toast later */
+    }
+  }, []);
+
+  // Drop the current chat log + conversation pointer. Next message
+  // sent will create a fresh row in `conversations`.
+  const startNewChat = useCallback(() => {
+    setMessages([]);
+    setConversationId(null);
+    setDraft("");
+    setView("chat");
+  }, []);
+
+  const deleteConversation = useCallback(
+    async (id: number) => {
+      try {
+        await ipc.chatDeleteConversation(id);
+        setConversations((cs) => cs.filter((c) => c.id !== id));
+        if (conversationId === id) {
+          setMessages([]);
+          setConversationId(null);
+        }
+      } catch {
+        /* swallow */
+      }
+    },
+    [conversationId],
+  );
 
   // "Ready" means we have a usable provider+model for AI modes. Ollama
   // running without any installed models still counts as not-ready —
@@ -241,6 +294,26 @@ export function AIDrawer({
     setDraft("");
     setBusy(true);
 
+    // Create-on-first-send: if there's no conversation row yet, mint
+    // one with a title derived from the user's first message.
+    let cid = conversationId;
+    if (cid === null) {
+      try {
+        const created = await ipc.chatCreateConversation(
+          firstLineTitle(prompt),
+          activeTab?.url ?? null,
+          activeTab?.title ?? null,
+        );
+        cid = created.id;
+        setConversationId(cid);
+        // Optimistic — refresh from the source of truth in the
+        // background so updated_at orders sort right.
+        refreshConversations();
+      } catch {
+        // Fall through with cid=null — backend will skip persistence.
+      }
+    }
+
     try {
       if (activeTab) {
         const onEvent = new Channel<ChatEvent>();
@@ -258,14 +331,22 @@ export function AIDrawer({
             });
           }
         };
-        await ipc.chatWithPage(activeTab.id, provider, model, prompt, onEvent);
+        await ipc.chatWithPage(
+          activeTab.id,
+          provider,
+          model,
+          prompt,
+          cid,
+          onEvent,
+        );
       } else {
         const onChunk = new Channel<string>();
         onChunk.onmessage = (text) => {
           setMessages((m) => appendAssistantText(m, text));
         };
-        await ipc.aiSend(provider, model, prompt, onChunk);
+        await ipc.aiSend(provider, model, prompt, cid, onChunk);
       }
+      refreshConversations();
     } catch (e) {
       setMessages((m) => {
         const without = dropTrailingEmptyAssistant(m);
@@ -421,18 +502,35 @@ export function AIDrawer({
             onChange={(v) => {
               setView(v);
               setOpenArtifact(null);
+              if (v === "history") {
+                refreshConversations();
+              }
             }}
           />
         </div>
-        <Button
-          variant="ghost"
-          size="icon"
-          aria-label="Close Chat"
-          onClick={onClose}
-          className="h-7 w-7"
-        >
-          <X size={14} strokeWidth={1.5} />
-        </Button>
+        <div className="flex items-center gap-0.5">
+          {view === "chat" && messages.length > 0 && (
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label="New chat"
+              title="New chat"
+              onClick={startNewChat}
+              className="h-7 w-7"
+            >
+              <Plus size={14} strokeWidth={1.75} />
+            </Button>
+          )}
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="Close Chat"
+            onClick={onClose}
+            className="h-7 w-7"
+          >
+            <X size={14} strokeWidth={1.5} />
+          </Button>
+        </div>
       </header>
 
       <div className="flex-1 overflow-y-auto overflow-x-hidden">
@@ -449,6 +547,14 @@ export function AIDrawer({
               onOpenArtifact={openArtifactById}
             />
           )
+        ) : view === "history" ? (
+          <HistoryView
+            conversations={conversations}
+            currentId={conversationId}
+            onOpen={loadConversation}
+            onDelete={deleteConversation}
+            onNewChat={startNewChat}
+          />
         ) : openArtifact ? (
           <ArtifactViewer
             artifact={openArtifact}
@@ -466,34 +572,40 @@ export function AIDrawer({
 
       {view === "chat" && (
         <div className="shrink-0 p-3">
-          <ModePicker value={mode} onChange={setMode} />
-          <div className="mt-2">
-            <InputArea
-              mode={mode}
-              draft={draft}
-              setDraft={setDraft}
-              onSend={onSend}
-              canSend={canSend}
-              busy={busy}
-              activeTab={activeTab}
-              providerReady={providerReady}
-              provider={provider}
-              model={model}
-              ollama={ollama}
-              status={status}
-              onProviderModelChange={(p, m) => {
-                setProvider(p);
-                setModel(m);
-              }}
-              searchInstance={searchInstance}
-              onSearchInstanceChange={setSearchInstance}
-              blockedReason={modeBlockedReason}
-            />
-          </div>
+          <InputArea
+            mode={mode}
+            onModeChange={setMode}
+            draft={draft}
+            setDraft={setDraft}
+            onSend={onSend}
+            canSend={canSend}
+            busy={busy}
+            activeTab={activeTab}
+            providerReady={providerReady}
+            provider={provider}
+            model={model}
+            ollama={ollama}
+            status={status}
+            onProviderModelChange={(p, m) => {
+              setProvider(p);
+              setModel(m);
+            }}
+            onNewChat={startNewChat}
+            canNewChat={messages.length > 0}
+            searchInstance={searchInstance}
+            onSearchInstanceChange={setSearchInstance}
+            blockedReason={modeBlockedReason}
+          />
         </div>
       )}
     </aside>
   );
+}
+
+function firstLineTitle(s: string): string {
+  const trimmed = s.trim().replace(/\s+/g, " ");
+  if (trimmed.length <= 60) return trimmed;
+  return trimmed.slice(0, 60).trimEnd() + "…";
 }
 
 function appendAssistantText(m: Message[], text: string): Message[] {
@@ -560,7 +672,7 @@ function ViewToggle({
 }) {
   return (
     <div className="flex items-center gap-0.5 rounded-full bg-muted/60 p-0.5 text-xs">
-      {(["chat", "artifacts"] as const).map((v) => (
+      {(["chat", "history", "artifacts"] as const).map((v) => (
         <button
           key={v}
           type="button"
@@ -579,41 +691,9 @@ function ViewToggle({
   );
 }
 
-function ModePicker({
-  value,
-  onChange,
-}: {
-  value: Mode;
-  onChange: (m: Mode) => void;
-}) {
-  return (
-    <div className="flex items-center gap-0.5 rounded-full border border-border bg-muted/20 p-0.5 text-[11px]">
-      {MODES.map((m) => {
-        const { icon: Icon, label } = MODE_META[m];
-        const active = value === m;
-        return (
-          <button
-            key={m}
-            type="button"
-            onClick={() => onChange(m)}
-            className={cn(
-              "flex flex-1 items-center justify-center gap-1 rounded-full px-2 py-1 transition-colors",
-              active
-                ? "bg-background text-foreground shadow-sm"
-                : "text-muted-foreground hover:text-foreground",
-            )}
-          >
-            <Icon size={11} strokeWidth={1.75} />
-            <span>{label}</span>
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
 function InputArea({
   mode,
+  onModeChange,
   draft,
   setDraft,
   onSend,
@@ -626,11 +706,14 @@ function InputArea({
   ollama,
   status,
   onProviderModelChange,
+  onNewChat,
+  canNewChat,
   searchInstance,
   onSearchInstanceChange,
   blockedReason,
 }: {
   mode: Mode;
+  onModeChange: (m: Mode) => void;
   draft: string;
   setDraft: (s: string) => void;
   onSend: () => void;
@@ -643,30 +726,38 @@ function InputArea({
   ollama: OllamaStatus | null;
   status: ProviderStatus | null;
   onProviderModelChange: (provider: ProviderId, model: string) => void;
+  onNewChat: () => void;
+  canNewChat: boolean;
   searchInstance: string | null;
   onSearchInstanceChange: (s: string | null) => void;
   blockedReason: string | null;
 }) {
   if (mode === "search" && !searchInstance) {
     return (
-      <SearchInstanceSetup
-        onSaved={(url) => onSearchInstanceChange(url)}
-      />
-    );
-  }
-
-  if (mode === "save") {
-    return (
-      <div className="flex flex-col gap-1.5">
-        <ProviderLine
+      <div className="flex flex-col gap-2">
+        <SearchInstanceSetup
+          onSaved={(url) => onSearchInstanceChange(url)}
+        />
+        <ToolsRow
           mode={mode}
-          activeTab={activeTab}
+          onModeChange={onModeChange}
           provider={provider}
           model={model}
           ollama={ollama}
           status={status}
           onProviderModelChange={onProviderModelChange}
+          onNewChat={onNewChat}
+          canNewChat={canNewChat}
+          activeTab={activeTab}
+          showProvider={false}
         />
+      </div>
+    );
+  }
+
+  if (mode === "save") {
+    return (
+      <div className="flex flex-col gap-2">
         <button
           type="button"
           onClick={onSend}
@@ -681,6 +772,19 @@ function InputArea({
           <BookmarkPlus size={14} strokeWidth={1.75} />
           {busy ? "Saving…" : "Save this page"}
         </button>
+        <ToolsRow
+          mode={mode}
+          onModeChange={onModeChange}
+          provider={provider}
+          model={model}
+          ollama={ollama}
+          status={status}
+          onProviderModelChange={onProviderModelChange}
+          onNewChat={onNewChat}
+          canNewChat={canNewChat}
+          activeTab={activeTab}
+          showProvider={false}
+        />
         {blockedReason && (
           <div className="px-1 text-[11px] text-muted-foreground">
             {blockedReason}
@@ -691,22 +795,13 @@ function InputArea({
   }
 
   const placeholder = placeholderFor(mode, activeTab);
+  const showProvider = mode === "chat" || mode === "summarize";
   const inputDisabled =
     busy ||
     ((mode === "chat" || mode === "summarize") && !providerReady);
 
   return (
-    <div className="flex flex-col gap-1.5">
-      <ProviderLine
-        mode={mode}
-        activeTab={activeTab}
-        searchInstance={searchInstance}
-        provider={provider}
-        model={model}
-        ollama={ollama}
-        status={status}
-        onProviderModelChange={onProviderModelChange}
-      />
+    <div className="flex flex-col gap-2">
       <div className="rounded-2xl border border-border bg-muted/20 px-3 py-2.5 transition-colors focus-within:border-ring focus-within:bg-muted/40">
         <textarea
           disabled={inputDisabled}
@@ -734,11 +829,144 @@ function InputArea({
           </button>
         </div>
       </div>
+      <ToolsRow
+        mode={mode}
+        onModeChange={onModeChange}
+        provider={provider}
+        model={model}
+        ollama={ollama}
+        status={status}
+        onProviderModelChange={onProviderModelChange}
+        onNewChat={onNewChat}
+        canNewChat={canNewChat}
+        activeTab={activeTab}
+        searchInstance={searchInstance}
+        showProvider={showProvider}
+      />
       {blockedReason && (
         <div className="px-1 text-[11px] text-muted-foreground">
           {blockedReason}
         </div>
       )}
+    </div>
+  );
+}
+
+/// One compact row of tools that lives BELOW the input box.
+///
+/// Layout: [mode segmented control] [provider chip] [+ new chat]
+/// ............................................. [page-context chip]
+///
+/// Mode is always visible. Provider only renders for AI modes
+/// (chat / summarize). Search shows a "via host" pill instead.
+function ToolsRow({
+  mode,
+  onModeChange,
+  provider,
+  model,
+  ollama,
+  status,
+  onProviderModelChange,
+  onNewChat,
+  canNewChat,
+  activeTab,
+  searchInstance,
+  showProvider,
+}: {
+  mode: Mode;
+  onModeChange: (m: Mode) => void;
+  provider: ProviderId | null;
+  model: string;
+  ollama: OllamaStatus | null;
+  status: ProviderStatus | null;
+  onProviderModelChange: (provider: ProviderId, model: string) => void;
+  onNewChat: () => void;
+  canNewChat: boolean;
+  activeTab: ActiveTab;
+  searchInstance?: string | null;
+  showProvider: boolean;
+}) {
+  const searchHost = (() => {
+    if (mode !== "search" || !searchInstance) return null;
+    try {
+      return new URL(searchInstance).hostname;
+    } catch {
+      return searchInstance;
+    }
+  })();
+
+  return (
+    <div className="flex items-center gap-1.5 px-1 text-[11px]">
+      <ModeSegmented value={mode} onChange={onModeChange} />
+      {showProvider && (
+        <ProviderPicker
+          provider={provider}
+          model={model}
+          ollama={ollama}
+          status={status}
+          onChange={onProviderModelChange}
+        />
+      )}
+      {searchHost && (
+        <span className="rounded-full bg-muted/40 px-2 py-0.5 text-subtle">
+          via {searchHost}
+        </span>
+      )}
+      {(mode === "chat" || mode === "summarize") && canNewChat && (
+        <button
+          type="button"
+          onClick={onNewChat}
+          aria-label="New chat"
+          title="New chat"
+          className="flex h-5 w-5 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+        >
+          <Plus size={11} strokeWidth={2} />
+        </button>
+      )}
+      {(mode === "chat" || mode === "summarize" || mode === "save") &&
+        activeTab && (
+          <span className="ml-auto">
+            <PageChip activeTab={activeTab} />
+          </span>
+        )}
+    </div>
+  );
+}
+
+/// Compact icon-only segmented control. Cycles through chat / summarize /
+/// search / save. Same modes as the old big pill row, just shrunk down
+/// to fit alongside the provider picker on a single line.
+function ModeSegmented({
+  value,
+  onChange,
+}: {
+  value: Mode;
+  onChange: (m: Mode) => void;
+}) {
+  return (
+    <div className="flex items-center gap-0.5 rounded-full border border-border bg-muted/20 p-0.5">
+      {MODES.map((m) => {
+        const { icon: Icon, label } = MODE_META[m];
+        const active = value === m;
+        return (
+          <button
+            key={m}
+            type="button"
+            onClick={() => onChange(m)}
+            aria-label={label}
+            title={label}
+            aria-pressed={active}
+            className={cn(
+              "flex h-5 w-5 items-center justify-center rounded-full transition-colors",
+              active
+                ? "bg-background text-foreground shadow-sm"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            <Icon size={11} strokeWidth={1.75} />
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -754,63 +982,6 @@ function placeholderFor(mode: Mode, activeTab: ActiveTab): string {
     return "Search the web…";
   }
   return "";
-}
-
-function ProviderLine({
-  mode,
-  activeTab,
-  searchInstance,
-  provider,
-  model,
-  ollama,
-  status,
-  onProviderModelChange,
-}: {
-  mode: Mode;
-  activeTab: ActiveTab;
-  searchInstance?: string | null;
-  provider: ProviderId | null;
-  model: string;
-  ollama: OllamaStatus | null;
-  status: ProviderStatus | null;
-  onProviderModelChange: (provider: ProviderId, model: string) => void;
-}) {
-  if (mode === "search") {
-    if (!searchInstance) return null;
-    let host = searchInstance;
-    try {
-      host = new URL(searchInstance).hostname;
-    } catch {
-      /* keep raw */
-    }
-    return (
-      <div className="flex items-center justify-between px-1 text-[11px] text-subtle">
-        <span>via {host}</span>
-      </div>
-    );
-  }
-  if (mode === "save") {
-    return (
-      <div className="flex items-center justify-between px-1 text-[11px] text-subtle">
-        <span>local only · no AI</span>
-        {activeTab && <PageChip activeTab={activeTab} />}
-      </div>
-    );
-  }
-  return (
-    <div className="flex items-center justify-between gap-2 px-1 text-[11px] text-subtle">
-      <ProviderPicker
-        provider={provider}
-        model={model}
-        ollama={ollama}
-        status={status}
-        onChange={onProviderModelChange}
-      />
-      {(mode === "chat" || mode === "summarize") && activeTab && (
-        <PageChip activeTab={activeTab} />
-      )}
-    </div>
-  );
 }
 
 function ProviderPicker({
@@ -1153,6 +1324,116 @@ function ArtifactList({
           onDelete={() => onDelete(a.id)}
         />
       ))}
+    </div>
+  );
+}
+
+function HistoryView({
+  conversations,
+  currentId,
+  onOpen,
+  onDelete,
+  onNewChat,
+}: {
+  conversations: Conversation[];
+  currentId: number | null;
+  onOpen: (id: number) => void;
+  onDelete: (id: number) => void;
+  onNewChat: () => void;
+}) {
+  if (conversations.length === 0) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-2 px-8 text-center text-sm text-muted-foreground">
+        <div className="text-foreground">No saved chats yet.</div>
+        <div className="text-xs">
+          Start a chat — every conversation lives here, locally, until you
+          delete it.
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="flex flex-col">
+      <button
+        type="button"
+        onClick={onNewChat}
+        className="flex items-center gap-2 border-b border-border px-3 py-2.5 text-left text-sm text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground"
+      >
+        <Plus size={13} strokeWidth={1.75} />
+        New chat
+      </button>
+      {conversations.map((c) => (
+        <ConversationRow
+          key={c.id}
+          conversation={c}
+          active={c.id === currentId}
+          onOpen={() => onOpen(c.id)}
+          onDelete={() => onDelete(c.id)}
+        />
+      ))}
+    </div>
+  );
+}
+
+function ConversationRow({
+  conversation,
+  active,
+  onOpen,
+  onDelete,
+}: {
+  conversation: Conversation;
+  active: boolean;
+  onOpen: () => void;
+  onDelete: () => void;
+}) {
+  const when = useMemo(
+    () => relativeTime(conversation.updated_at),
+    [conversation.updated_at],
+  );
+  const host = useMemo(() => {
+    if (!conversation.page_url) return null;
+    try {
+      return new URL(conversation.page_url).hostname.replace(/^www\./, "");
+    } catch {
+      return conversation.page_url;
+    }
+  }, [conversation.page_url]);
+  return (
+    <div
+      className={cn(
+        "group flex items-start gap-2 border-b border-border px-3 py-2.5 transition-colors hover:bg-muted/30",
+        active && "bg-muted/40",
+      )}
+    >
+      <button
+        type="button"
+        onClick={onOpen}
+        className="flex min-w-0 flex-1 flex-col items-start text-left"
+      >
+        <div className="w-full truncate text-sm text-foreground">
+          {conversation.title || "Untitled"}
+        </div>
+        <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+          {host && (
+            <>
+              <span className="truncate">{host}</span>
+              <span>·</span>
+            </>
+          )}
+          <span>{when}</span>
+        </div>
+      </button>
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          onDelete();
+        }}
+        aria-label="Delete conversation"
+        className="shrink-0 rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground group-hover:opacity-100"
+      >
+        <Trash2 size={13} strokeWidth={1.5} />
+      </button>
     </div>
   );
 }

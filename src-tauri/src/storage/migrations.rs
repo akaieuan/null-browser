@@ -7,7 +7,7 @@
 
 use rusqlite::Connection;
 
-const LATEST: i64 = 4;
+const LATEST: i64 = 5;
 
 pub fn run(conn: &mut Connection) -> rusqlite::Result<()> {
     let current: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
@@ -17,6 +17,7 @@ pub fn run(conn: &mut Connection) -> rusqlite::Result<()> {
             2 => MIGRATION_002,
             3 => MIGRATION_003,
             4 => MIGRATION_004,
+            5 => MIGRATION_005,
             _ => unreachable!("no migration defined for version {version}"),
         };
         let tx = conn.transaction()?;
@@ -85,4 +86,29 @@ const MIGRATION_004: &str = r#"
 
     CREATE INDEX artifacts_created_at_idx ON artifacts (created_at DESC);
     CREATE INDEX artifacts_source_url_idx ON artifacts (source_url);
+"#;
+
+const MIGRATION_005: &str = r#"
+    CREATE TABLE conversations (
+        id           INTEGER PRIMARY KEY,
+        title        TEXT    NOT NULL,
+        page_url     TEXT,
+        page_title   TEXT,
+        created_at   INTEGER NOT NULL,
+        updated_at   INTEGER NOT NULL
+    );
+
+    CREATE INDEX conversations_updated_idx ON conversations (updated_at DESC);
+
+    CREATE TABLE messages (
+        id              INTEGER PRIMARY KEY,
+        conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        role            TEXT    NOT NULL CHECK (role IN ('user', 'assistant')),
+        content         TEXT    NOT NULL,
+        provider        TEXT,
+        model           TEXT,
+        created_at      INTEGER NOT NULL
+    );
+
+    CREATE INDEX messages_conversation_idx ON messages (conversation_id, created_at);
 "#;

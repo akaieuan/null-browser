@@ -73,6 +73,25 @@ export type SearchResult = {
   snippet: string;
 };
 
+export type Conversation = {
+  id: number;
+  title: string;
+  page_url: string | null;
+  page_title: string | null;
+  created_at: number;
+  updated_at: number;
+};
+
+export type ChatMessageRow = {
+  id: number;
+  conversation_id: number;
+  role: "user" | "assistant";
+  content: string;
+  provider: string | null;
+  model: string | null;
+  created_at: number;
+};
+
 export const ipc = {
   getAppVersion: () => invoke<string>("get_app_version"),
 
@@ -133,8 +152,35 @@ export const ipc = {
     provider: string,
     model: string,
     prompt: string,
+    conversationId: number | null,
     onChunk: Channel<string>,
-  ) => invoke<string>("ai_send", { provider, model, prompt, onChunk }),
+  ) =>
+    invoke<string>("ai_send", {
+      provider,
+      model,
+      prompt,
+      conversationId,
+      onChunk,
+    }),
+
+  chatCreateConversation: (
+    title: string,
+    pageUrl: string | null,
+    pageTitle: string | null,
+  ) =>
+    invoke<Conversation>("chat_create_conversation", {
+      title,
+      pageUrl,
+      pageTitle,
+    }),
+  chatListConversations: () =>
+    invoke<Conversation[]>("chat_list_conversations"),
+  chatGetMessages: (conversationId: number) =>
+    invoke<ChatMessageRow[]>("chat_get_messages", { conversationId }),
+  chatRenameConversation: (id: number, title: string) =>
+    invoke<void>("chat_rename_conversation", { id, title }),
+  chatDeleteConversation: (id: number) =>
+    invoke<void>("chat_delete_conversation", { id }),
 
   listArtifacts: () => invoke<Artifact[]>("list_artifacts"),
   getArtifact: (id: number) => invoke<Artifact>("get_artifact", { id }),
@@ -160,6 +206,7 @@ export const ipc = {
     provider: string,
     model: string,
     prompt: string,
+    conversationId: number | null,
     onEvent: Channel<ChatEvent>,
   ) =>
     invoke<string>("chat_with_page", {
@@ -167,6 +214,7 @@ export const ipc = {
       provider,
       model,
       prompt,
+      conversationId,
       onEvent,
     }),
 
