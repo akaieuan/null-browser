@@ -6,10 +6,6 @@ The name is the thesis: `null` is the value a function returns when there is not
 
 ![Null browser — Google homepage with the Profile panel open showing Appearance swatches, Start page, Search engine, and AI providers.](docs/screenshots/overview.png)
 
-<video src="https://github.com/akaieuan/null-browser/raw/HEAD/docs/screenshots/null-browser.webm" controls width="100%"></video>
-
-_[Watch the demo](docs/screenshots/null-browser.webm) — the AI drawer with chat, summarize, search, and save modes running against a live tab._
-
 ---
 
 ## What is Null?
@@ -17,7 +13,7 @@ _[Watch the demo](docs/screenshots/null-browser.webm) — the AI drawer with cha
 Null is a macOS desktop browser built on Tauri 2 (Rust) with a React + TypeScript UI. It uses the system WebView (WebKit on macOS), so it renders pages like Safari would — but the browser itself is written with different defaults.
 
 **The thesis:**
-1. **Opt-in AI, local-first direction.** The AI drawer has four modes — chat grounded in the current tab, summarize, web search, and save-as-artifact. Cloud providers (Anthropic today) are opt-in per-provider with keys in the OS keychain, and every call is surfaced in the Network Inspector *before* the request leaves. Ollama integration is next so local becomes the default.
+1. **Opt-in AI, local-first.** The AI drawer has four modes — chat grounded in the current tab, summarize, web search, and save-as-artifact. Local Ollama is auto-detected and used by default when a daemon is running. Cloud providers (Anthropic today) are opt-in per-provider with keys in the OS keychain, and every call is surfaced in the Network Inspector *before* the request leaves.
 2. **Radical transparency.** The Network Inspector is a first-class surface — not buried in devtools. It shows every outbound request the browser makes, in real time, grouped by origin. Click a shield next to any origin to block it.
 3. **Assist, don't complete.** The AI is a collaborator, not an agent. It does not click, type, or navigate on your behalf without explicit approval.
 
@@ -52,7 +48,7 @@ Read the full reasoning in [docs/PHILOSOPHY.md](docs/PHILOSOPHY.md).
 
 ### Browsing
 - Multi-tab browsing with native `show`/`hide` switching — all tabs stay loaded in memory, no re-render on switch
-- Drag to reorder tabs, close with `⌘W`, new tab with `⌘T` or the `+` button
+- Close with `⌘W`, new tab with `⌘T` or the `+` button
 - Back / forward / reload (`⌘[` / `⌘]` / `⌘R`)
 - URL bar with search detection — type a URL, press enter to navigate; type anything else, get sent to your chosen search engine
 - Custom Safari-compact top bar: tabs in row 1, nav + centered address bar + action buttons in row 2, optional bookmarks bar below
@@ -60,7 +56,7 @@ Read the full reasoning in [docs/PHILOSOPHY.md](docs/PHILOSOPHY.md).
 ### Bookmarks
 - Star inside the URL bar to add/remove the active page
 - Bookmarks bar between the toolbar and the content, only visible when you have any
-- Drag to reorder; right-click to remove (planned)
+- Drag to reorder (dnd-kit); right-click for the native context menu — open in new tab, edit, copy URL, delete
 - Persisted in SQLite (`bookmarks` table, migration 002 adds positions)
 
 ### History
@@ -96,30 +92,34 @@ Read the full reasoning in [docs/PHILOSOPHY.md](docs/PHILOSOPHY.md).
 - Typography-first layout — section titles and hairline dividers, no card chrome
 - **Appearance** — theme + mode
 - **Privacy** — read-only status rows reflecting the invariants ("Telemetry: off", "Cloud connections: none", "All data: local")
-- **AI** — Anthropic key management + provider status (Ollama detection lands in M5)
+- **AI** — live Ollama detection (running / installed model count / install link), inline Anthropic key input, "Default routing" row that shows which provider would actually answer right now
 - **About** — app version, repo link, one-line tagline
 
 ### AI drawer
 
-`⌘/` opens a right-side drawer that narrows the content webview to make room. Four modes, picked from a pill row above the input:
+`⌘/` opens a right-side drawer that narrows the content webview to make room. The layout is input on top, tools row below: textarea with embedded send arrow, then a single row carrying the mode segmented control, the provider/model picker, a "+ new chat" button, and the page-context chip.
 
-- **Chat** — ask questions about the current tab. The page is extracted once (Mozilla Readability + Turndown), cached for five minutes per tab URL, and sent as context with your question. Single-shot today; conversation history is the next follow-up.
-- **Summarize** — extract → AI → save as a `summary` artifact. Optional "focus" field narrows what the summary emphasizes.
+Three views, switchable from the header (`Chat | History | Artifacts`):
+
+- **Chat** — multi-turn conversations grounded in the current tab. The page is extracted once (Mozilla Readability + Turndown), cached for five minutes per tab URL, and injected into the *first* user turn; follow-ups send the conversation history without re-extracting (the model carries the page from there). Conversations persist to SQLite — title is derived from the first message, sortable by recency.
+- **Summarize** — extract → AI → save as a `summary` artifact. Optional "focus" field narrows what the summary emphasizes. Doesn't touch the conversation log.
 - **Search** — runs your query against a SearXNG instance you configure on first use. Nothing ships pre-configured (invariant 2). Results render as clickable cards; no AI call.
 - **Save** — extract → save as a `clip` artifact. Zero AI, zero network traffic beyond the page itself.
 
-Artifacts (both `summary` and `clip` rows) get their own view inside the drawer, openable as read-only markdown. They live in SQLite and nothing else.
+The provider/model picker pill defaults intelligently: **Ollama if a daemon is running with installed models**, Anthropic if a key is set, otherwise the empty state offers both paths. Pick a different model mid-conversation and the next turn routes there; choice persists across launches in `localStorage`.
 
-Every cloud call is recorded to the Network Inspector — `ai:anthropic` for chat and summarize, `search:searxng` for search — *before* the request leaves. Provider keys live in the OS keychain, never in config files. URL query strings are stripped from prompts before they go out so session tokens don't ride along.
+Artifacts (both `summary` and `clip`) and conversations live in their own SQLite tables. Nothing else.
+
+Every AI and search call is recorded to the Network Inspector — `ai:anthropic` and `ai:ollama` for chat/summarize, `search:searxng` for search — *before* the request leaves. Local Ollama calls log to `127.0.0.1:11434` so you can see the chat happened even when nothing left the machine. Provider keys live in the OS keychain, never in config files. URL query strings are stripped from prompts before they go out so session tokens don't ride along.
 
 Extraction happens inside each tab's own WebView via vendored Readability + Turndown, routed back to Rust through the `null-event://` custom scheme using chunked `Image.src` beacons (not `fetch` — survives strict-CSP sites like Medium, news, docs).
 
-Today: Anthropic for chat/summarize, SearXNG for search. Next: Ollama wired in so local is the default for chat and summarize; Brave Search API as an alternate search provider; conversation history in chat mode.
+Today: Anthropic + Ollama for chat/summarize, SearXNG for search, multi-turn conversation history. Next: Brave Search API as an alternate search provider.
 
 ### Under the hood
 - Tauri 2 with the `unstable` feature for multi-webview support
-- Rust backend: `tokio`, `rusqlite` (bundled SQLite — no system dep), `directories` (XDG data paths), `tracing` (local logging only), `objc2` + `objc2-app-kit` for macOS-specific tweaks like the dock icon
-- Frontend: React 19 + TypeScript + Vite + Tailwind v4 + shadcn primitives + lucide-react icons + dnd-kit for drag reordering + Zustand-ready state management
+- Rust backend: `tokio`, `rusqlite` (bundled SQLite — no system dep), `reqwest` (rustls, no system OpenSSL), `keyring` (OS-native keychain), `directories` (XDG data paths), `objc2` + `objc2-app-kit` for macOS-specific tweaks like the dock icon
+- Frontend: React 19 + TypeScript + Vite + Tailwind v4 + shadcn primitives + lucide-react icons + dnd-kit for bookmark reordering + react-markdown for chat / artifact rendering
 - Search engines: configurable URL templates — add more by appending to `SEARCH_ENGINES` in `src/lib/preferences.ts`
 - UA pinned to current Safari 18 so sites that sniff for Chrome/Safari don't flag WKWebView as "unsupported"
 
@@ -149,8 +149,8 @@ Today: Anthropic for chat/summarize, SearXNG for search. Next: Ollama wired in s
 - Xcode Command Line Tools on macOS: `xcode-select --install`
 
 Optional:
-- [Ollama](https://ollama.com) — for local AI inference (not wired yet; lands in Milestone 5)
-- An Anthropic API key — for Chat / Summarize modes in the AI drawer today
+- [Ollama](https://ollama.com) — for local AI inference. Install, run `ollama pull llama3.2` (or any model), and the drawer auto-detects on next open
+- An Anthropic API key — alternative to Ollama for Chat / Summarize modes
 - A [SearXNG](https://searxng.org) instance (self-hosted or public) — for Search mode
 
 ### Build and run
@@ -177,9 +177,10 @@ Produces a `.app` bundle in `src-tauri/target/release/bundle/macos/`.
 All local. On macOS:
 
 ```
-~/Library/Application Support/sh.null.browser/null.db    — SQLite (bookmarks, history, blocked origins, settings)
+~/Library/Application Support/sh.null.browser/null.db    — SQLite (bookmarks, history, blocked origins, artifacts, conversations, messages, settings)
 ~/Library/Caches/sh.null.browser/                        — WebKit cache
-localStorage                                              — theme, profile name, start page, search engine
+OS keychain (sh.null.browser service)                    — provider API keys (Anthropic)
+localStorage                                              — theme, profile name, start page, search engine, AI provider/model preference
 ```
 
 To wipe everything: quit Null and `rm -rf ~/Library/Application\ Support/sh.null.browser ~/Library/Caches/sh.null.browser`.
@@ -209,9 +210,9 @@ null-browser/
 │       │   ├── extract.rs        — extraction bridge (chunked Image-beacon transport) + per-tab cache
 │       │   └── vendor/           — Readability + Turndown, embedded via include_str!
 │       ├── network/              — inspector state, navigation + subresource capture, AI/search outbound recording
-│       ├── storage/              — SQLite schema (migrations 001–004) + CRUD for bookmarks / history / blocked origins / artifacts / settings
-│       ├── commands/             — one file per IPC domain (tabs, bookmarks, history, network, meta, ai, artifacts, search)
-│       ├── ai/                   — provider dispatcher + keychain-backed key cache + per-vendor modules (Anthropic wired; Ollama, OpenAI scaffolded)
+│       ├── storage/              — SQLite schema (migrations 001–005) + CRUD for bookmarks / history / blocked origins / artifacts / conversations / messages / settings
+│       ├── commands/             — one file per IPC domain (tabs, bookmarks, history, network, meta, ai, artifacts, chats, search)
+│       ├── ai/                   — provider dispatcher + keychain-backed key cache + per-vendor modules (Anthropic + Ollama wired; OpenAI scaffolded)
 │       ├── search/               — web search providers (SearXNG today)
 │       ├── permissions/          — approval broker (stub)
 │       ├── settings/             — versioned JSON config (stub)
@@ -219,9 +220,9 @@ null-browser/
 │       └── dock.rs               — macOS dock icon via objc2
 │
 ├── docs/
-│   ├── PHILOSOPHY.md             — the six invariants and why they exist
-│   └── CONTRIBUTING.md           — the three-question PR rule, voice guide, dep audit
+│   └── PHILOSOPHY.md             — the six invariants and why they exist
 │
+├── CONTRIBUTING.md               — the three-question PR rule, voice guide, dep audit
 ├── CLAUDE.md                     — project context for Claude Code
 ├── LICENSE                       — MPL 2.0
 └── README.md                     — you are here
@@ -238,13 +239,15 @@ null-browser/
 - **M2 Phase 2** — subresource capture (via injected PerformanceObserver) + per-origin blocking
 - **M3** — bring-your-own AI providers (Anthropic, OS-keychain-stored keys, per-call network visibility)
 - **M4** — AI drawer with chat (page-grounded), summarize, search (SearXNG), save; artifacts persisted to SQLite
+- **M5.1** — Ollama wired for chat + summarize; provider/model picker in the drawer; live detection in Settings
+- **M5.2** — multi-turn conversation history (SQLite migrations 005); cleaner drawer UI (input on top, tools below); History view alongside Chat / Artifacts
 
 ### In progress / next
 - **M2 Phase 3** — subresource blocking via `WKContentRuleList` (native WebKit path — objc2 work) and `WKScriptMessageHandler` to close CSP blind spots
-- **M5** — Ollama wired into chat and summarize so local is the default; conversation history; Brave Search alternate provider
+- **M5.3** — Brave Search API as an alternate search provider
 - **Favicons** — fetch once, cache locally, render in tabs and bookmarks
 - **Tab persistence** — restore open tabs on relaunch via SQLite
-- **Personal search** — FTS5 over history / bookmarks / artifacts so you can search what you've seen, not the whole web
+- **Personal search** — FTS5 over history / bookmarks / artifacts / conversations so you can search what you've seen, not the whole web
 
 ### Not on the roadmap
 - Chromium forking (one-person project can't maintain Chromium)
@@ -257,7 +260,7 @@ null-browser/
 
 Read [docs/PHILOSOPHY.md](docs/PHILOSOPHY.md) first. If the change you're proposing wouldn't sit comfortably next to those invariants, it probably doesn't belong here — no matter how useful in isolation.
 
-Before opening a PR, read [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md). Every PR that touches networking, storage, or AI routing has to answer three questions in its description:
+Before opening a PR, read [CONTRIBUTING.md](CONTRIBUTING.md). Every PR that touches networking, storage, or AI routing has to answer three questions in its description:
 
 - What does this **store**?
 - What does this **transmit**?
