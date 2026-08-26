@@ -333,11 +333,8 @@ pub fn create_tab(
                 return NewWindowResponse::Deny;
             }
             if features.size().is_none() {
-                let _ = popup_app.emit_to(
-                    EventTarget::webview("main"),
-                    "open-url",
-                    url.to_string(),
-                );
+                let _ =
+                    popup_app.emit_to(EventTarget::webview("main"), "open-url", url.to_string());
                 return NewWindowResponse::Deny;
             }
             #[cfg(target_os = "macos")]
@@ -367,48 +364,46 @@ pub fn create_tab(
         // Downloads land in ~/Downloads under a collision-free name;
         // the shell shows start/finish. Refusing when the Downloads
         // directory cannot be resolved beats writing somewhere silent.
-        .on_download(move |_webview, event| {
-            match event {
-                DownloadEvent::Requested { url, destination } => {
-                    let Some(dir) = directories::UserDirs::new()
-                        .and_then(|u| u.download_dir().map(|p| p.to_path_buf()))
-                    else {
-                        return false;
-                    };
-                    let suggested = destination
-                        .file_name()
-                        .map(|n| n.to_string_lossy().into_owned())
-                        .filter(|n| !n.is_empty())
-                        .or_else(|| {
-                            url.path_segments()
-                                .and_then(|mut s| s.next_back())
-                                .filter(|s| !s.is_empty())
-                                .map(|s| s.to_string())
-                        })
-                        .unwrap_or_else(|| "download".to_string());
-                    let path = unique_download_path(&dir, &sanitize_filename(&suggested));
-                    let name = path
-                        .file_name()
-                        .map(|n| n.to_string_lossy().into_owned())
-                        .unwrap_or_default();
-                    *destination = path;
-                    let _ = dl_app.emit_to(
-                        EventTarget::webview("main"),
-                        "download-started",
-                        serde_json::json!({ "name": name, "url": url.to_string() }),
-                    );
-                    true
-                }
-                DownloadEvent::Finished { url, success, .. } => {
-                    let _ = dl_app.emit_to(
-                        EventTarget::webview("main"),
-                        "download-finished",
-                        serde_json::json!({ "url": url.to_string(), "success": success }),
-                    );
-                    true
-                }
-                _ => true,
+        .on_download(move |_webview, event| match event {
+            DownloadEvent::Requested { url, destination } => {
+                let Some(dir) = directories::UserDirs::new()
+                    .and_then(|u| u.download_dir().map(|p| p.to_path_buf()))
+                else {
+                    return false;
+                };
+                let suggested = destination
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .filter(|n| !n.is_empty())
+                    .or_else(|| {
+                        url.path_segments()
+                            .and_then(|mut s| s.next_back())
+                            .filter(|s| !s.is_empty())
+                            .map(|s| s.to_string())
+                    })
+                    .unwrap_or_else(|| "download".to_string());
+                let path = unique_download_path(&dir, &sanitize_filename(&suggested));
+                let name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                *destination = path;
+                let _ = dl_app.emit_to(
+                    EventTarget::webview("main"),
+                    "download-started",
+                    serde_json::json!({ "name": name, "url": url.to_string() }),
+                );
+                true
             }
+            DownloadEvent::Finished { url, success, .. } => {
+                let _ = dl_app.emit_to(
+                    EventTarget::webview("main"),
+                    "download-finished",
+                    serde_json::json!({ "url": url.to_string(), "success": success }),
+                );
+                true
+            }
+            _ => true,
         })
         .on_page_load(move |webview, payload| {
             let url_string = payload.url().to_string();
@@ -444,8 +439,7 @@ pub fn create_tab(
 /// "Corners" preference), and it has to live here because new tabs are
 /// created after the preference was last set.
 #[cfg(target_os = "macos")]
-static CORNER_RADIUS_PX: std::sync::atomic::AtomicU32 =
-    std::sync::atomic::AtomicU32::new(12);
+static CORNER_RADIUS_PX: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(12);
 
 /// Round the native webview's layer so the page reads as a card, at the
 /// radius the Corners preference currently asks for.
@@ -489,8 +483,8 @@ pub fn force_shell_transparent(app: &AppHandle) {
         return;
     };
     let _ = webview.with_webview(|pw| unsafe {
-        use objc2::{class, msg_send};
         use objc2::runtime::AnyObject;
+        use objc2::{class, msg_send};
         use objc2_foundation::{NSNumber, NSString};
         let wk = pw.inner() as *mut AnyObject;
         // Instance-level private KVC — the same key wry itself uses on

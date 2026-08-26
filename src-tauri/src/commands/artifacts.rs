@@ -62,9 +62,7 @@ fn save_clip(
     kind: &str,
     payload: &webview::extract::ExtractPayload,
 ) -> Result<Artifact, String> {
-    if let Ok(Some(id)) =
-        storage.find_identical_artifact(kind, &payload.url, &payload.markdown)
-    {
+    if let Ok(Some(id)) = storage.find_identical_artifact(kind, &payload.url, &payload.markdown) {
         if let Ok(existing) = storage.get_artifact(id) {
             return Ok(existing);
         }
@@ -81,7 +79,12 @@ fn save_clip(
         .map_err(|e| e.to_string())?;
     // File mirror is best-effort: a full disk or odd permissions must
     // not lose the clip, which is already safe in SQLite.
-    match notes::write_note(artifact.id, &artifact.title, &artifact.source_url, &artifact.markdown) {
+    match notes::write_note(
+        artifact.id,
+        &artifact.title,
+        &artifact.source_url,
+        &artifact.markdown,
+    ) {
         Ok(path) => {
             let path = path.to_string_lossy().into_owned();
             let _ = storage.set_artifact_file_path(artifact.id, &path);
@@ -103,9 +106,7 @@ pub fn create_note(
     let artifact = storage
         .insert_artifact("note", &title, &source_url, None, "", "none")
         .map_err(|e| e.to_string())?;
-    if let Ok(path) =
-        notes::write_note(artifact.id, &artifact.title, &artifact.source_url, "")
-    {
+    if let Ok(path) = notes::write_note(artifact.id, &artifact.title, &artifact.source_url, "") {
         let path = path.to_string_lossy().into_owned();
         let _ = storage.set_artifact_file_path(artifact.id, &path);
     }
@@ -132,8 +133,7 @@ pub fn update_note(
             let new_path = path.to_string_lossy().into_owned();
             if let Some(old_path) = &old.file_path {
                 if old_path != &new_path {
-                    let expected =
-                        notes::note_content(&old.title, &old.source_url, &old.markdown);
+                    let expected = notes::note_content(&old.title, &old.source_url, &old.markdown);
                     let _ = notes::delete_note(old_path, &expected);
                 }
             }

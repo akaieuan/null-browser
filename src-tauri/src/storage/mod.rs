@@ -263,8 +263,7 @@ impl Storage {
         // and deliberately, so its icon discloses nothing the pin
         // doesn't — and wiping it just breaks every tile until each
         // site is visited again (which is exactly what happened).
-        let mut stmt =
-            conn.prepare("SELECT url FROM bookmarks WHERE kind = 'bookmark'")?;
+        let mut stmt = conn.prepare("SELECT url FROM bookmarks WHERE kind = 'bookmark'")?;
         let keep: std::collections::HashSet<String> = stmt
             .query_map([], |row| row.get::<_, String>(0))?
             .filter_map(|r| r.ok())
@@ -483,12 +482,7 @@ impl Storage {
     /// Rewrite a note's title and body. The file mirror is the
     /// caller's job (commands::artifacts), because it owns the
     /// old-path/new-path dance.
-    pub fn update_artifact(
-        &self,
-        id: i64,
-        title: &str,
-        markdown: &str,
-    ) -> rusqlite::Result<()> {
+    pub fn update_artifact(&self, id: i64, title: &str, markdown: &str) -> rusqlite::Result<()> {
         let conn = self.conn();
         conn.execute(
             "UPDATE artifacts SET title = ?1, markdown = ?2 WHERE id = ?3",

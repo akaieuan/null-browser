@@ -33,7 +33,10 @@ pub fn ingest(app: &AppHandle, origin: &str, data_url: &str) {
         return;
     };
     let Some(payload) = data_url.strip_prefix(PNG_PREFIX) else {
-        eprintln!("null-favicon: REJECT not png data url: {}", &data_url[..data_url.len().min(40)]);
+        eprintln!(
+            "null-favicon: REJECT not png data url: {}",
+            &data_url[..data_url.len().min(40)]
+        );
         return;
     };
     // 4/3 expansion plus padding: reject before decoding work.

@@ -17,11 +17,7 @@ pub fn get_app_version() -> &'static str {
 /// AppKit's range. Chosen per appearance because several are
 /// inherently dark (HUD) or inherently bright (Popover).
 #[tauri::command]
-pub fn set_glass_material(
-    app: AppHandle,
-    appearance: String,
-    level: String,
-) -> Result<(), String> {
+pub fn set_glass_material(app: AppHandle, appearance: String, level: String) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
         use window_vibrancy::{

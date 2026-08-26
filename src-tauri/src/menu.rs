@@ -63,9 +63,19 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
             &action(app, "new_tab", "New Tab", Some("CmdOrCtrl+T"))?,
             &action(app, "new_note", "New Note", Some("CmdOrCtrl+N"))?,
             &action(app, "close_tab", "Close Tab", Some("CmdOrCtrl+W"))?,
-            &action(app, "close_window", "Close Window", Some("Shift+CmdOrCtrl+W"))?,
+            &action(
+                app,
+                "close_window",
+                "Close Window",
+                Some("Shift+CmdOrCtrl+W"),
+            )?,
             &PredefinedMenuItem::separator(app)?,
-            &action(app, "clip_page", "New Note from Page", Some("Shift+CmdOrCtrl+C"))?,
+            &action(
+                app,
+                "clip_page",
+                "New Note from Page",
+                Some("Shift+CmdOrCtrl+C"),
+            )?,
             &action(
                 app,
                 "clip_selection",
@@ -112,7 +122,12 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         "View",
         true,
         &[
-            &action(app, "toggle_sidebar", "Hide Sidebar", Some("Ctrl+CmdOrCtrl+S"))?,
+            &action(
+                app,
+                "toggle_sidebar",
+                "Hide Sidebar",
+                Some("Ctrl+CmdOrCtrl+S"),
+            )?,
             &action(
                 app,
                 "toggle_split",

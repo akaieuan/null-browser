@@ -58,7 +58,7 @@ Read the full reasoning in [docs/PHILOSOPHY.md](docs/PHILOSOPHY.md).
 
 ### Navigation
 
-A left source list owns tabs and pins, the way Finder and Mail own their sidebars — 240px, full height, taking the top-left of the window with the traffic lights. Pinned sites are a tile grid at the top (drag one pin onto another to fold them into a folder, iOS-style; drag a tab up into the grid to pin it). Tabs are labelled rows below. History, Network and Settings live in an icon rail at the bottom. Notes is deliberately not here — it is summoned next to the page from the toolbar (`⌘/`), because it is something you use beside a page, not a place you go.
+A left source list owns tabs and pins, the way Finder and Mail own their sidebars — 240px, full height, taking the top-left of the window with the traffic lights. Pinned sites are a tile grid at the top (drag one pin onto another to fold them into a folder, iOS-style; drag a tab up into the grid to pin it; drag a pin out of an open folder to un-file it). Tabs are labelled rows below. History, Network and Settings live in an icon rail at the bottom. Notes is deliberately not here — it is summoned next to the page from the toolbar (`⌘/`), because it is something you use beside a page, not a place you go.
 
 The whole window is glass: the chrome and every card are translucent washes over macOS window vibrancy, with the desktop supplying the depth. Settings picks the strength (Clear / Frosted / Solid). If macOS's "Reduce transparency" accessibility setting is on, the system flattens all of it — that is the OS's contract, not a bug.
 
@@ -77,7 +77,7 @@ Every keyboard shortcut is a native menu accelerator rather than a listener in t
 ### Bookmarks
 - Star inside the URL bar to add/remove the active page; drag a tab into the pin grid to pin it
 - Tiles at the top of the sidebar showing each site's real favicon — captured from the page as you visit it, never fetched by Null (invariant 2); a hostname-derived letter mark stands in until the first visit
-- Drop one pin dead-centre on another to create a folder (edges still reorder); folder tiles show a 2×2 of their members, click to spread them open. Deleting a folder re-roots its pins — arrangement is never a place data can be lost
+- Drop one pin dead-centre on another to create a folder (edges still reorder); folder tiles show a 2×2 of their members, click to spread them open. Pins leave the same way they came: drag one out of the open folder's tray and release it anywhere outside to return it to the grid, dead-centre on another folder to move it there, or past the sidebar to open a split. The last pin out dissolves the folder, and deleting a folder re-roots its pins — arrangement is never a place data can be lost
 - Right-click for the native context menu — open in new tab, edit, copy URL, delete; middle-click opens in a new tab
 - Persisted in SQLite (`bookmarks` table; migration 008 adds folders)
 

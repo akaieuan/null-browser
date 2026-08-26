@@ -208,4 +208,3 @@ pub async fn extract_tab(
 
     Ok(payload)
 }
-
