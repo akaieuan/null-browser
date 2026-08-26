@@ -20,6 +20,12 @@ out/
 # Rust
 /target/
 
+# Per-surface captures from `npm run ui:shoot`. Intermediates only: the
+# sheets that docs actually reference embed them, so committing both
+# stores every frame twice.
+docs/screenshots/shots/
+docs/screenshots/.sheet.html
+
 # Environment
 .env
 .env.local
