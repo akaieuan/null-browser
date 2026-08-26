@@ -10,7 +10,8 @@ import {
   Trash2,
 } from "lucide-react";
 
-import { PanelHeader } from "@/components/panels/PanelHeader";
+import { EmptyState } from "@/components/panels/EmptyState";
+import { Panel } from "@/components/panels/Panel";
 import { ipc, type NetworkEvent } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 
@@ -79,23 +80,17 @@ export function NetworkInspector({ onClose }: { onClose: () => void }) {
   const groups = useMemo(() => groupByOrigin(events), [events]);
 
   return (
-    <div className="absolute inset-0 z-40 flex flex-col overflow-hidden bg-background text-foreground">
-      <PanelHeader title="Network" onClose={onClose} />
-
-      <main className="flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-2xl px-8 py-8">
-          {events.length === 0 ? (
-            <EmptyState paused={paused} blockedCount={blocked.size} />
-          ) : (
-            <>
-              <div className="mb-6 flex items-center justify-between text-xs">
+    <Panel title="Network" onClose={onClose}>
+      {events.length === 0 ? (
+        <NetworkEmpty paused={paused} blockedCount={blocked.size} />
+      ) : (
+        <>
+              <div className="flex h-8 items-center justify-between text-xs">
                 <div className="flex items-center gap-3">
                   <span
                     className={cn(
                       "flex h-1.5 w-1.5 rounded-full",
-                      paused
-                        ? "bg-muted-foreground"
-                        : "bg-foreground animate-pulse",
+                      paused ? "bg-muted-foreground" : "bg-select",
                     )}
                   />
                   <span className="text-muted-foreground">
@@ -128,7 +123,7 @@ export function NetworkInspector({ onClose }: { onClose: () => void }) {
                 </div>
               </div>
 
-              <div className="flex flex-col border-t border-border">
+              <div className="mt-3 flex flex-col gap-0.5">
                 {groups.map(([origin, rows]) => (
                   <OriginGroup
                     key={origin}
@@ -141,11 +136,9 @@ export function NetworkInspector({ onClose }: { onClose: () => void }) {
                   />
                 ))}
               </div>
-            </>
-          )}
-        </div>
-      </main>
-    </div>
+        </>
+      )}
+    </Panel>
   );
 }
 
@@ -166,8 +159,8 @@ function OriginGroup({
 }) {
   const last = events[events.length - 1];
   return (
-    <section className="border-b border-border">
-      <div className="group flex items-center gap-2 py-3 hover:bg-muted/30">
+    <section>
+      <div className="group -mx-3 flex items-center gap-2 rounded-lg px-3 py-2.5 transition-colors hover:bg-muted">
         <button
           type="button"
           onClick={onToggle}
@@ -209,10 +202,11 @@ function OriginGroup({
           aria-label={blocked ? "Unblock origin" : "Block origin"}
           title={blocked ? "Unblock" : "Block"}
           className={cn(
-            "mr-1 shrink-0 rounded p-1 transition-colors",
+            "mr-1 shrink-0 rounded-sm p-1 transition-colors",
+            "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
             blocked
-              ? "text-foreground hover:bg-muted"
-              : "text-muted-foreground opacity-0 hover:bg-muted hover:text-foreground group-hover:opacity-100",
+              ? "text-foreground hover:bg-accent"
+              : "text-muted-foreground opacity-0 hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100",
           )}
         >
           {blocked ? (
@@ -223,16 +217,22 @@ function OriginGroup({
         </button>
       </div>
       {expanded && (
-        <div className="pb-2 pl-5">
+        // The expanded body is a recessed surface rather than a bracket
+        // of rules: one tone step says "these belong to the row above"
+        // without drawing four more lines into a panel that is already
+        // a list of lists.
+        <div className="mb-1 ml-5 flex flex-col rounded-lg bg-muted/60 px-3 py-1.5">
           {events
             .slice()
             .reverse()
             .map((e) => (
-              <div
-                key={e.id}
-                className="flex items-start gap-3 border-t border-border/60 py-1.5 first:border-t-0"
-              >
-                <span className="mt-0.5 shrink-0 text-[10px] font-medium uppercase tracking-wider text-subtle">
+              <div key={e.id} className="flex items-start gap-3 py-1">
+                <span
+                  className={cn(
+                    "mt-0.5 shrink-0 font-mono text-[10px] font-medium uppercase tracking-[0.14em]",
+                    e.blocked ? "text-danger" : "text-subtle",
+                  )}
+                >
                   {e.blocked ? "blocked" : e.kind}
                 </span>
                 <span
@@ -267,14 +267,14 @@ function ActionButton({
     <button
       type="button"
       onClick={onClick}
-      className="flex items-center gap-1.5 rounded px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+      className="flex items-center gap-1.5 rounded-sm px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
     >
       {children}
     </button>
   );
 }
 
-function EmptyState({
+function NetworkEmpty({
   paused,
   blockedCount,
 }: {
@@ -282,17 +282,13 @@ function EmptyState({
   blockedCount: number;
 }) {
   return (
-    <div className="flex h-64 flex-col items-center justify-center gap-2 text-center">
-      <div className="text-sm text-foreground">
-        {paused ? "Recording paused" : "No requests yet"}
-      </div>
-      <div className="max-w-sm text-xs text-muted-foreground">
-        Every navigation Null makes is listed here in real time, grouped by
-        origin. Hover an origin and click the shield to block all future
-        requests to it.
-        {blockedCount > 0 && ` (${blockedCount} currently blocked.)`}
-      </div>
-    </div>
+    <EmptyState title={paused ? "Recording paused" : "No requests yet"}>
+      Every request Null makes is listed here as it happens, grouped by origin.
+      Hover an origin and click the shield to block everything it sends after
+      that.
+      {blockedCount > 0 &&
+        ` ${blockedCount} ${blockedCount === 1 ? "origin is" : "origins are"} blocked.`}
+    </EmptyState>
   );
 }
 

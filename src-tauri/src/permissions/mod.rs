@@ -1,5 +1,7 @@
 //! Approval broker. Every sensitive action routes through here.
 //!
-//! Examples: "read this page into the AI sidebar", "send this
-//! message to Anthropic", "clear all history". The broker renders a
-//! consistent approval UI and records the user's decision.
+//! Examples: "clear all history", "wipe site logins". The broker
+//! renders a consistent approval UI and records the user's decision.
+//!
+//! Not yet implemented — today the few destructive actions confirm
+//! inline (see the clear-data button in the profile menu).

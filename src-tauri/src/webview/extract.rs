@@ -17,28 +17,20 @@
 
 use std::collections::HashMap;
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Url};
+use tauri::AppHandle;
 use tokio::sync::oneshot;
 
 use super::run_extract;
 
-/// Drop query string and fragment from a URL before including it in
-/// an AI prompt. URLs routinely carry session tokens, auth params,
-/// and tracking ids in their query strings; stripping them keeps
-/// that content out of the outbound payload without forcing users
-/// to think about it. The saved artifact still uses the real URL.
-pub fn strip_url_query(url_str: &str) -> String {
-    match Url::parse(url_str) {
-        Ok(mut u) => {
-            u.set_query(None);
-            u.set_fragment(None);
-            u.to_string()
-        }
-        Err(_) => url_str.to_string(),
-    }
+/// What to pull out of the tab: the readable article, or whatever the
+/// user has selected.
+#[derive(Clone, Copy)]
+pub enum ExtractKind {
+    Article,
+    Selection,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -58,9 +50,17 @@ struct InnerPayload {
     markdown: String,
 }
 
+/// Upper bounds on what a page may feed the reassembly buffer while an
+/// extraction is in flight. The injected script chunks at 1500 chars,
+/// so a real article tops out at a few hundred chunks; anything past
+/// these caps is a page trying to exhaust memory, not an article.
+const MAX_CHUNKS: u32 = 8192;
+const MAX_TOTAL_BYTES: usize = 16 * 1024 * 1024;
+
 struct ChunkBuffer {
     total: u32,
     parts: HashMap<u32, String>,
+    bytes: usize,
 }
 
 #[derive(Default)]
@@ -98,6 +98,9 @@ impl ExtractRegistry {
     /// we're actively awaiting. That keeps unrelated page JS from
     /// spamming the registry.
     pub fn ingest_chunk(&self, req_id: &str, index: u32, total: u32, data: &str) {
+        if total == 0 || total > MAX_CHUNKS || index >= total {
+            return;
+        }
         let complete = {
             let mut p = self.pending.lock().expect("extract registry poisoned");
             if !p.senders.contains_key(req_id) {
@@ -109,14 +112,22 @@ impl ExtractRegistry {
                 .or_insert_with(|| ChunkBuffer {
                     total,
                     parts: HashMap::new(),
+                    bytes: 0,
                 });
             if entry.total != total {
                 *entry = ChunkBuffer {
                     total,
                     parts: HashMap::new(),
+                    bytes: 0,
                 };
             }
-            entry.parts.insert(index, data.to_string());
+            if entry.bytes + data.len() > MAX_TOTAL_BYTES {
+                return;
+            }
+            if let Some(old) = entry.parts.insert(index, data.to_string()) {
+                entry.bytes -= old.len();
+            }
+            entry.bytes += data.len();
             entry.parts.len() as u32 == entry.total
         };
         if complete {
@@ -166,11 +177,12 @@ pub async fn extract_tab(
     app: &AppHandle,
     registry: &ExtractRegistry,
     tab_id: &str,
+    kind: ExtractKind,
 ) -> Result<ExtractPayload, String> {
     let req_id = uuid::Uuid::new_v4().to_string();
     let rx = registry.register(req_id.clone());
 
-    if let Err(e) = run_extract(app, tab_id, &req_id) {
+    if let Err(e) = run_extract(app, tab_id, &req_id, kind) {
         registry.take(&req_id);
         return Err(e);
     }
@@ -179,7 +191,14 @@ pub async fn extract_tab(
         Ok(Ok(p)) => p,
         Ok(Err(_)) | Err(_) => {
             registry.take(&req_id);
-            return Err("couldn't read this page (strict CSP, or not an article)".to_string());
+            return Err(match kind {
+                ExtractKind::Article => {
+                    "couldn't read this page (strict CSP, or not an article)".to_string()
+                }
+                ExtractKind::Selection => {
+                    "couldn't read the selection (strict CSP on this site?)".to_string()
+                }
+            });
         }
     };
 
@@ -190,49 +209,3 @@ pub async fn extract_tab(
     Ok(payload)
 }
 
-/// Small in-memory cache of the last successful extraction per tab.
-/// Used by Chat mode so that a conversation grounded in the current
-/// tab doesn't re-extract on every user message. Keyed by tab_id; an
-/// entry is considered stale if the tab's current URL has changed
-/// (we re-check on each lookup) or if it's older than CACHE_TTL.
-///
-/// Nothing persists. Closing the app drops the cache.
-#[derive(Default)]
-pub struct ExtractCache {
-    entries: Mutex<HashMap<String, CachedEntry>>,
-}
-
-struct CachedEntry {
-    url: String,
-    payload: ExtractPayload,
-    at: Instant,
-}
-
-const CACHE_TTL: Duration = Duration::from_secs(300);
-
-impl ExtractCache {
-    pub fn get_fresh(&self, tab_id: &str, current_url: &str) -> Option<ExtractPayload> {
-        let guard = self.entries.lock().ok()?;
-        let e = guard.get(tab_id)?;
-        if e.url != current_url {
-            return None;
-        }
-        if e.at.elapsed() > CACHE_TTL {
-            return None;
-        }
-        Some(e.payload.clone())
-    }
-
-    pub fn put(&self, tab_id: String, url: String, payload: ExtractPayload) {
-        if let Ok(mut g) = self.entries.lock() {
-            g.insert(
-                tab_id,
-                CachedEntry {
-                    url,
-                    payload,
-                    at: Instant::now(),
-                },
-            );
-        }
-    }
-}

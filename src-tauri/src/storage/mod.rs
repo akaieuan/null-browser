@@ -21,6 +21,10 @@ pub struct Bookmark {
     pub url: String,
     pub title: String,
     pub created_at: i64,
+    /// `"bookmark"` or `"folder"`. A folder has an empty URL.
+    pub kind: String,
+    /// The folder this row lives in; `None` at the top level.
+    pub parent_id: Option<i64>,
 }
 
 /// One visit in the local history.
@@ -39,6 +43,13 @@ pub struct BlockedOrigin {
     pub created_at: i64,
 }
 
+/// One origin's icon: a validated `data:image/png;base64,` URL.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Favicon {
+    pub origin: String,
+    pub data: String,
+}
+
 /// A saved page summary (or later: other kinds of saved AI outputs).
 /// Lives on disk, openable inside the AI drawer next to chat.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -51,32 +62,9 @@ pub struct Artifact {
     pub markdown: String,
     pub model: String,
     pub created_at: i64,
-}
-
-/// A chat thread. Optionally pinned to a page (URL + title captured at
-/// the start of the conversation). All turns of the chat live in
-/// `messages` and reference this row via `conversation_id`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Conversation {
-    pub id: i64,
-    pub title: String,
-    pub page_url: Option<String>,
-    pub page_title: Option<String>,
-    pub created_at: i64,
-    pub updated_at: i64,
-}
-
-/// One turn in a chat thread. Provider/model recorded so the user can
-/// see — when scrolling back — which model gave each answer.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChatMessage {
-    pub id: i64,
-    pub conversation_id: i64,
-    pub role: String,
-    pub content: String,
-    pub provider: Option<String>,
-    pub model: Option<String>,
-    pub created_at: i64,
+    /// Where this clip's markdown mirror lives on disk. `None` if the
+    /// file write failed — the clip is still in SQLite either way.
+    pub file_path: Option<String>,
 }
 
 /// Owned handle to the single SQLite connection used by the app.
@@ -113,7 +101,8 @@ impl Storage {
     pub fn list_bookmarks(&self) -> rusqlite::Result<Vec<Bookmark>> {
         let conn = self.conn();
         let mut stmt = conn.prepare(
-            "SELECT id, url, title, created_at FROM bookmarks ORDER BY position ASC, id ASC",
+            "SELECT id, url, title, created_at, kind, parent_id FROM bookmarks \
+             ORDER BY position ASC, id ASC",
         )?;
         let rows = stmt.query_map([], |row| {
             Ok(Bookmark {
@@ -121,6 +110,8 @@ impl Storage {
                 url: row.get(1)?,
                 title: row.get(2)?,
                 created_at: row.get(3)?,
+                kind: row.get(4)?,
+                parent_id: row.get(5)?,
             })
         })?;
         rows.collect()
@@ -142,12 +133,68 @@ impl Storage {
             url: url.to_string(),
             title: title.to_string(),
             created_at: now,
+            kind: "bookmark".to_string(),
+            parent_id: None,
         })
     }
 
     pub fn remove_bookmark(&self, id: i64) -> rusqlite::Result<()> {
         let conn = self.conn();
+        // Deleting a folder re-roots its members instead of deleting
+        // them: a folder is arrangement, not a container data can be
+        // lost inside.
+        conn.execute(
+            "UPDATE bookmarks SET parent_id = NULL WHERE parent_id = ?1",
+            params![id],
+        )?;
         conn.execute("DELETE FROM bookmarks WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    /// Drop one bookmark onto another: create a folder at the target's
+    /// position holding both. iOS's folder gesture.
+    pub fn group_bookmarks(&self, target_id: i64, dragged_id: i64) -> rusqlite::Result<()> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let position: i64 = tx.query_row(
+            "SELECT position FROM bookmarks WHERE id = ?1",
+            params![target_id],
+            |r| r.get(0),
+        )?;
+        tx.execute(
+            "INSERT INTO bookmarks (url, title, created_at, position, kind) \
+             VALUES ('', 'Folder', ?1, ?2, 'folder')",
+            params![now, position],
+        )?;
+        let folder = tx.last_insert_rowid();
+        tx.execute(
+            "UPDATE bookmarks SET parent_id = ?1 WHERE id IN (?2, ?3) AND kind = 'bookmark'",
+            params![folder, target_id, dragged_id],
+        )?;
+        tx.commit()
+    }
+
+    /// Move a bookmark into a folder (or back to the top level with
+    /// `None`). Folders themselves never nest.
+    pub fn move_bookmark(&self, id: i64, parent_id: Option<i64>) -> rusqlite::Result<()> {
+        let conn = self.conn();
+        conn.execute(
+            "UPDATE bookmarks SET parent_id = ?1, \
+             position = (SELECT COALESCE(MAX(position) + 1, 0) FROM bookmarks b2 \
+                         WHERE b2.parent_id IS ?1) \
+             WHERE id = ?2 AND kind = 'bookmark'",
+            params![parent_id, id],
+        )?;
+        // An emptied folder dissolves — an empty tile is furniture.
+        conn.execute(
+            "DELETE FROM bookmarks WHERE kind = 'folder' \
+             AND NOT EXISTS (SELECT 1 FROM bookmarks c WHERE c.parent_id = bookmarks.id)",
+            [],
+        )?;
         Ok(())
     }
 
@@ -157,12 +204,6 @@ impl Storage {
             "UPDATE bookmarks SET url = ?1, title = ?2 WHERE id = ?3",
             params![url, title, id],
         )?;
-        Ok(())
-    }
-
-    pub fn remove_bookmark_by_url(&self, url: &str) -> rusqlite::Result<()> {
-        let conn = self.conn();
-        conn.execute("DELETE FROM bookmarks WHERE url = ?1", params![url])?;
         Ok(())
     }
 
@@ -216,7 +257,65 @@ impl Storage {
     pub fn clear_history(&self) -> rusqlite::Result<()> {
         let conn = self.conn();
         conn.execute("DELETE FROM history", [])?;
+        // Favicons are which-origins-were-visited data — the same
+        // sensitivity class as history, so they go with it. Except the
+        // pinned ones: a bookmark already records its origin durably
+        // and deliberately, so its icon discloses nothing the pin
+        // doesn't — and wiping it just breaks every tile until each
+        // site is visited again (which is exactly what happened).
+        let mut stmt =
+            conn.prepare("SELECT url FROM bookmarks WHERE kind = 'bookmark'")?;
+        let keep: std::collections::HashSet<String> = stmt
+            .query_map([], |row| row.get::<_, String>(0))?
+            .filter_map(|r| r.ok())
+            .filter_map(|u| {
+                tauri::Url::parse(&u)
+                    .ok()
+                    .map(|p| p.origin().ascii_serialization())
+            })
+            .collect();
+        drop(stmt);
+        let mut stmt = conn.prepare("SELECT origin FROM favicons")?;
+        let all: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(0))?
+            .filter_map(|r| r.ok())
+            .collect();
+        drop(stmt);
+        for origin in all {
+            if !keep.contains(&origin) {
+                conn.execute("DELETE FROM favicons WHERE origin = ?1", params![origin])?;
+            }
+        }
         Ok(())
+    }
+
+    /// Upsert one origin's icon. `data` must already have passed
+    /// `favicons::ingest` validation — this layer stores, it does not
+    /// judge.
+    pub fn set_favicon(&self, origin: &str, data: &str) -> rusqlite::Result<()> {
+        let conn = self.conn();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        conn.execute(
+            "INSERT INTO favicons (origin, data, updated_at) VALUES (?1, ?2, ?3)
+             ON CONFLICT(origin) DO UPDATE SET data = ?2, updated_at = ?3",
+            params![origin, data, now],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_favicons(&self) -> rusqlite::Result<Vec<Favicon>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare("SELECT origin, data FROM favicons")?;
+        let rows = stmt.query_map([], |row| {
+            Ok(Favicon {
+                origin: row.get(0)?,
+                data: row.get(1)?,
+            })
+        })?;
+        rows.collect()
     }
 
     pub fn add_blocked_origin(&self, origin: &str) -> rusqlite::Result<BlockedOrigin> {
@@ -295,13 +394,74 @@ impl Storage {
             markdown: markdown.to_string(),
             model: model.to_string(),
             created_at: now,
+            file_path: None,
         })
+    }
+
+    /// Record where a clip's markdown mirror was written.
+    pub fn set_artifact_file_path(&self, id: i64, path: &str) -> rusqlite::Result<()> {
+        let conn = self.conn();
+        conn.execute(
+            "UPDATE artifacts SET file_path = ?1 WHERE id = ?2",
+            params![path, id],
+        )?;
+        Ok(())
+    }
+
+    /// Every artifact that is an exact duplicate (same kind, source and
+    /// body) of a *newer* one. Used by the startup cleanup; the newest
+    /// copy of each group is never in this list.
+    pub fn duplicate_artifacts(&self) -> rusqlite::Result<Vec<Artifact>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT id, kind, title, source_url, source_title, markdown, model,
+                    created_at, file_path
+             FROM artifacts a
+             WHERE EXISTS (
+               SELECT 1 FROM artifacts b
+               WHERE b.kind = a.kind AND b.source_url = a.source_url
+                 AND b.markdown = a.markdown AND b.id > a.id
+             )",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(Artifact {
+                id: row.get(0)?,
+                kind: row.get(1)?,
+                title: row.get(2)?,
+                source_url: row.get(3)?,
+                source_title: row.get(4)?,
+                markdown: row.get(5)?,
+                model: row.get(6)?,
+                created_at: row.get(7)?,
+                file_path: row.get(8)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    /// An existing artifact with this exact kind, source and body, if
+    /// one exists. Newest wins so a re-save surfaces the most recent
+    /// identical capture.
+    pub fn find_identical_artifact(
+        &self,
+        kind: &str,
+        source_url: &str,
+        markdown: &str,
+    ) -> rusqlite::Result<Option<i64>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT id FROM artifacts
+             WHERE kind = ?1 AND source_url = ?2 AND markdown = ?3
+             ORDER BY id DESC LIMIT 1",
+        )?;
+        let mut rows = stmt.query_map(params![kind, source_url, markdown], |row| row.get(0))?;
+        rows.next().transpose()
     }
 
     pub fn list_artifacts(&self) -> rusqlite::Result<Vec<Artifact>> {
         let conn = self.conn();
         let mut stmt = conn.prepare(
-            "SELECT id, kind, title, source_url, source_title, markdown, model, created_at \
+            "SELECT id, kind, title, source_url, source_title, markdown, model, created_at, file_path \
              FROM artifacts ORDER BY created_at DESC, id DESC",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -314,15 +474,33 @@ impl Storage {
                 markdown: row.get(5)?,
                 model: row.get(6)?,
                 created_at: row.get(7)?,
+                file_path: row.get(8)?,
             })
         })?;
         rows.collect()
     }
 
+    /// Rewrite a note's title and body. The file mirror is the
+    /// caller's job (commands::artifacts), because it owns the
+    /// old-path/new-path dance.
+    pub fn update_artifact(
+        &self,
+        id: i64,
+        title: &str,
+        markdown: &str,
+    ) -> rusqlite::Result<()> {
+        let conn = self.conn();
+        conn.execute(
+            "UPDATE artifacts SET title = ?1, markdown = ?2 WHERE id = ?3",
+            params![title, markdown, id],
+        )?;
+        Ok(())
+    }
+
     pub fn get_artifact(&self, id: i64) -> rusqlite::Result<Artifact> {
         let conn = self.conn();
         conn.query_row(
-            "SELECT id, kind, title, source_url, source_title, markdown, model, created_at \
+            "SELECT id, kind, title, source_url, source_title, markdown, model, created_at, file_path \
              FROM artifacts WHERE id = ?1",
             params![id],
             |row| {
@@ -335,6 +513,7 @@ impl Storage {
                     markdown: row.get(5)?,
                     model: row.get(6)?,
                     created_at: row.get(7)?,
+                    file_path: row.get(8)?,
                 })
             },
         )
@@ -371,153 +550,6 @@ impl Storage {
         conn.execute("DELETE FROM settings WHERE key = ?1", params![key])?;
         Ok(())
     }
-
-    // -------------------------------------------------------------- chats
-
-    pub fn create_conversation(
-        &self,
-        title: &str,
-        page_url: Option<&str>,
-        page_title: Option<&str>,
-    ) -> rusqlite::Result<Conversation> {
-        let conn = self.conn();
-        let now = now_unix();
-        conn.execute(
-            "INSERT INTO conversations (title, page_url, page_title, created_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?4)",
-            params![title, page_url, page_title, now],
-        )?;
-        Ok(Conversation {
-            id: conn.last_insert_rowid(),
-            title: title.to_string(),
-            page_url: page_url.map(|s| s.to_string()),
-            page_title: page_title.map(|s| s.to_string()),
-            created_at: now,
-            updated_at: now,
-        })
-    }
-
-    pub fn list_conversations(&self) -> rusqlite::Result<Vec<Conversation>> {
-        let conn = self.conn();
-        let mut stmt = conn.prepare(
-            "SELECT id, title, page_url, page_title, created_at, updated_at \
-             FROM conversations ORDER BY updated_at DESC, id DESC",
-        )?;
-        let rows = stmt.query_map([], |row| {
-            Ok(Conversation {
-                id: row.get(0)?,
-                title: row.get(1)?,
-                page_url: row.get(2)?,
-                page_title: row.get(3)?,
-                created_at: row.get(4)?,
-                updated_at: row.get(5)?,
-            })
-        })?;
-        rows.collect()
-    }
-
-    pub fn get_conversation(&self, id: i64) -> rusqlite::Result<Conversation> {
-        let conn = self.conn();
-        conn.query_row(
-            "SELECT id, title, page_url, page_title, created_at, updated_at \
-             FROM conversations WHERE id = ?1",
-            params![id],
-            |row| {
-                Ok(Conversation {
-                    id: row.get(0)?,
-                    title: row.get(1)?,
-                    page_url: row.get(2)?,
-                    page_title: row.get(3)?,
-                    created_at: row.get(4)?,
-                    updated_at: row.get(5)?,
-                })
-            },
-        )
-    }
-
-    pub fn rename_conversation(&self, id: i64, title: &str) -> rusqlite::Result<()> {
-        let conn = self.conn();
-        conn.execute(
-            "UPDATE conversations SET title = ?1, updated_at = ?2 WHERE id = ?3",
-            params![title, now_unix(), id],
-        )?;
-        Ok(())
-    }
-
-    pub fn delete_conversation(&self, id: i64) -> rusqlite::Result<()> {
-        let conn = self.conn();
-        // FK ON DELETE CASCADE drops messages too — but rusqlite ships
-        // with foreign_keys OFF by default. Belt-and-braces: drop
-        // messages first, then the row, in one transaction.
-        let mut conn = conn;
-        let tx = conn.transaction()?;
-        tx.execute(
-            "DELETE FROM messages WHERE conversation_id = ?1",
-            params![id],
-        )?;
-        tx.execute("DELETE FROM conversations WHERE id = ?1", params![id])?;
-        tx.commit()
-    }
-
-    pub fn list_messages(&self, conversation_id: i64) -> rusqlite::Result<Vec<ChatMessage>> {
-        let conn = self.conn();
-        let mut stmt = conn.prepare(
-            "SELECT id, conversation_id, role, content, provider, model, created_at \
-             FROM messages WHERE conversation_id = ?1 ORDER BY created_at ASC, id ASC",
-        )?;
-        let rows = stmt.query_map(params![conversation_id], |row| {
-            Ok(ChatMessage {
-                id: row.get(0)?,
-                conversation_id: row.get(1)?,
-                role: row.get(2)?,
-                content: row.get(3)?,
-                provider: row.get(4)?,
-                model: row.get(5)?,
-                created_at: row.get(6)?,
-            })
-        })?;
-        rows.collect()
-    }
-
-    pub fn append_message(
-        &self,
-        conversation_id: i64,
-        role: &str,
-        content: &str,
-        provider: Option<&str>,
-        model: Option<&str>,
-    ) -> rusqlite::Result<ChatMessage> {
-        let mut conn = self.conn();
-        let now = now_unix();
-        let tx = conn.transaction()?;
-        tx.execute(
-            "INSERT INTO messages (conversation_id, role, content, provider, model, created_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![conversation_id, role, content, provider, model, now],
-        )?;
-        let id = tx.last_insert_rowid();
-        tx.execute(
-            "UPDATE conversations SET updated_at = ?1 WHERE id = ?2",
-            params![now, conversation_id],
-        )?;
-        tx.commit()?;
-        Ok(ChatMessage {
-            id,
-            conversation_id,
-            role: role.to_string(),
-            content: content.to_string(),
-            provider: provider.map(|s| s.to_string()),
-            model: model.map(|s| s.to_string()),
-            created_at: now,
-        })
-    }
-}
-
-fn now_unix() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
 }
 
 fn db_path() -> PathBuf {

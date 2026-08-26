@@ -7,7 +7,7 @@
 
 use rusqlite::Connection;
 
-const LATEST: i64 = 5;
+const LATEST: i64 = 8;
 
 pub fn run(conn: &mut Connection) -> rusqlite::Result<()> {
     let current: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
@@ -18,6 +18,9 @@ pub fn run(conn: &mut Connection) -> rusqlite::Result<()> {
             3 => MIGRATION_003,
             4 => MIGRATION_004,
             5 => MIGRATION_005,
+            6 => MIGRATION_006,
+            7 => MIGRATION_007,
+            8 => MIGRATION_008,
             _ => unreachable!("no migration defined for version {version}"),
         };
         let tx = conn.transaction()?;
@@ -111,4 +114,46 @@ const MIGRATION_005: &str = r#"
     );
 
     CREATE INDEX messages_conversation_idx ON messages (conversation_id, created_at);
+"#;
+
+/// Null dropped its AI layer: inference never happens in the browser,
+/// so chat conversations no longer exist. Clips gained a `file_path`
+/// pointing at their markdown mirror in the user's notes directory.
+///
+/// Dropping `conversations`/`messages` deletes locally-stored chat
+/// history — the app never had a copy anywhere else, and keeping dead
+/// tables around would misrepresent what Null stores.
+const MIGRATION_006: &str = r#"
+    DROP TABLE IF EXISTS messages;
+    DROP TABLE IF EXISTS conversations;
+
+    ALTER TABLE artifacts ADD COLUMN file_path TEXT;
+"#;
+
+/// Favicons, keyed by origin so one row serves the tab list, the
+/// bookmark tiles, and anything else that shows a site. `data` is a
+/// `data:image/png;base64,` URL that already passed the Rust-side
+/// validation in `favicons::ingest` — nothing else may write here.
+/// What this stores: a 64px icon per visited origin, locally. What it
+/// transmits: nothing. What it remembers: which origins were visited —
+/// same sensitivity class as `history`, so clearing history clears it
+/// too, except icons for currently-pinned origins: a bookmark already
+/// records its origin durably, so keeping its icon discloses nothing
+/// (see `clear_history`).
+const MIGRATION_007: &str = r#"
+    CREATE TABLE favicons (
+        origin      TEXT    PRIMARY KEY,
+        data        TEXT    NOT NULL,
+        updated_at  INTEGER NOT NULL
+    );
+"#;
+
+/// Bookmark folders: one level of nesting, iOS-style. A folder is a
+/// bookmarks row with `kind = 'folder'` and an empty URL; its members
+/// point at it via `parent_id`. Deleting a folder re-roots its members
+/// (handled in `remove_bookmark`) — a folder is arrangement, never a
+/// place data can be lost in.
+const MIGRATION_008: &str = r#"
+    ALTER TABLE bookmarks ADD COLUMN kind TEXT NOT NULL DEFAULT 'bookmark';
+    ALTER TABLE bookmarks ADD COLUMN parent_id INTEGER REFERENCES bookmarks(id);
 "#;

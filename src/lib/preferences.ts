@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useSyncExternalStore } from "react";
 
 // Lightweight user preferences stored in localStorage. When a SQLite-backed
 // settings table lands later, this moves behind the same interface.
@@ -6,8 +6,41 @@ import { useCallback, useEffect, useState } from "react";
 const NAME_KEY = "null.profile_name";
 const START_PAGE_KEY = "null.start_page";
 const SEARCH_ENGINE_KEY = "null.search_engine";
+const CORNERS_KEY = "null.ui_corners";
+const GLASS_KEY = "null.ui_glass";
+const HOVER_REVEAL_KEY = "null.ui_hover_reveal";
 
 const DEFAULT_NAME = "Null";
+
+/**
+ * Corner radius family. One knob drives the whole scale (`--radius`)
+ * plus the native page-card corners, so the chrome and the page can
+ * never disagree about how round the app is.
+ */
+export type CornersPref = "sharp" | "default" | "round";
+export const CORNERS: Array<{
+  id: CornersPref;
+  label: string;
+  /** Value for the CSS `--radius` custom property. */
+  radius: string;
+  /** CALayer cornerRadius for the native page webviews, in px. */
+  nativeRadius: number;
+}> = [
+  { id: "sharp", label: "Sharp", radius: "0.375rem", nativeRadius: 8 },
+  { id: "default", label: "Default", radius: "0.625rem", nativeRadius: 12 },
+  { id: "round", label: "Round", radius: "0.875rem", nativeRadius: 16 },
+];
+
+/**
+ * How much desktop shows through the chrome. Purely compositing — the
+ * wash percentage over the vibrancy layer; `solid` opts out entirely.
+ */
+export type GlassPref = "clear" | "frosted" | "solid";
+export const GLASS_OPTIONS: Array<{ id: GlassPref; label: string }> = [
+  { id: "clear", label: "Clear" },
+  { id: "frosted", label: "Frosted" },
+  { id: "solid", label: "Solid" },
+];
 
 /**
  * Start-page preference:
@@ -116,44 +149,122 @@ export function searchUrlFor(engine: SearchEngineId, query: string): string {
   return found.template.replace("%s", encodeURIComponent(query));
 }
 
+/**
+ * One store, shared by every caller of `usePreferences`.
+ *
+ * This used to be plain `useState` inside the hook, which meant each
+ * component that called it got its own private copy. `App` calls it and
+ * so does `SettingsPanel`, so changing the search engine or the start
+ * page in Settings updated Settings' copy and left App's stale for the
+ * rest of the session — the setting appeared to save and then did
+ * nothing. A module-level snapshot plus `useSyncExternalStore` gives
+ * every caller the same value and re-renders all of them on a write.
+ */
+type Prefs = {
+  name: string;
+  startPage: StartPagePref;
+  searchEngine: SearchEngineId;
+  corners: CornersPref;
+  glass: GlassPref;
+  hoverReveal: boolean;
+};
+
+/** localStorage key per pref, for the generic write path. */
+const KEYS: Record<keyof Prefs, string> = {
+  name: NAME_KEY,
+  startPage: START_PAGE_KEY,
+  searchEngine: SEARCH_ENGINE_KEY,
+  corners: CORNERS_KEY,
+  glass: GLASS_KEY,
+  hoverReveal: HOVER_REVEAL_KEY,
+};
+
+function loadCorners(): CornersPref {
+  const raw = safeGet(CORNERS_KEY);
+  return CORNERS.some((c) => c.id === raw) ? (raw as CornersPref) : "default";
+}
+
+function loadGlass(): GlassPref {
+  const raw = safeGet(GLASS_KEY);
+  return GLASS_OPTIONS.some((g) => g.id === raw) ? (raw as GlassPref) : "frosted";
+}
+
+let snapshot: Prefs | null = null;
+const listeners = new Set<() => void>();
+
+function getSnapshot(): Prefs {
+  snapshot ??= {
+    name: loadProfileName(),
+    startPage: loadStartPage(),
+    searchEngine: loadSearchEngine(),
+    corners: loadCorners(),
+    glass: loadGlass(),
+    hoverReveal: safeGet(HOVER_REVEAL_KEY) !== "off",
+  };
+  return snapshot;
+}
+
+function write(patch: Partial<Prefs>): void {
+  const cur = getSnapshot();
+  const next = { ...cur, ...patch };
+  // Identity must change for useSyncExternalStore to see the update, and
+  // must NOT change when nothing did, or every writer loops.
+  if ((Object.keys(KEYS) as Array<keyof Prefs>).every((k) => next[k] === cur[k])) {
+    return;
+  }
+  snapshot = next;
+  for (const k of Object.keys(patch) as Array<keyof Prefs>) {
+    const v = next[k];
+    safeSet(KEYS[k], typeof v === "boolean" ? (v ? "on" : "off") : String(v));
+  }
+  for (const l of listeners) l();
+}
+
+function subscribe(fn: () => void): () => void {
+  listeners.add(fn);
+  return () => listeners.delete(fn);
+}
+
 /** React hook with reactive state + localStorage persistence. */
 export function usePreferences() {
-  const [name, setNameState] = useState<string>(loadProfileName);
-  const [startPage, setStartPageState] = useState<StartPagePref>(loadStartPage);
-  const [searchEngine, setSearchEngineState] =
-    useState<SearchEngineId>(loadSearchEngine);
-
-  useEffect(() => {
-    safeSet(NAME_KEY, name);
-  }, [name]);
-
-  useEffect(() => {
-    safeSet(START_PAGE_KEY, startPage);
-  }, [startPage]);
-
-  useEffect(() => {
-    safeSet(SEARCH_ENGINE_KEY, searchEngine);
-  }, [searchEngine]);
+  const prefs = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 
   const setName = useCallback((next: string) => {
-    const trimmed = next.trim();
-    setNameState(trimmed || DEFAULT_NAME);
+    write({ name: next.trim() || DEFAULT_NAME });
   }, []);
 
   const setStartPage = useCallback((next: StartPagePref) => {
-    setStartPageState(next);
+    write({ startPage: next });
   }, []);
 
   const setSearchEngine = useCallback((next: SearchEngineId) => {
-    setSearchEngineState(next);
+    write({ searchEngine: next });
+  }, []);
+
+  const setCorners = useCallback((next: CornersPref) => {
+    write({ corners: next });
+  }, []);
+
+  const setGlass = useCallback((next: GlassPref) => {
+    write({ glass: next });
+  }, []);
+
+  const setHoverReveal = useCallback((next: boolean) => {
+    write({ hoverReveal: next });
   }, []);
 
   return {
-    name,
+    name: prefs.name,
     setName,
-    startPage,
+    startPage: prefs.startPage,
     setStartPage,
-    searchEngine,
+    searchEngine: prefs.searchEngine,
     setSearchEngine,
+    corners: prefs.corners,
+    setCorners,
+    glass: prefs.glass,
+    setGlass,
+    hoverReveal: prefs.hoverReveal,
+    setHoverReveal,
   };
 }

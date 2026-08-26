@@ -1,10 +1,38 @@
-import { Channel, invoke } from "@tauri-apps/api/core";
+import { invoke as tauriInvoke } from "@tauri-apps/api/core";
+
+import type { ContentRect } from "@/lib/layout";
+
+/**
+ * In a dev build opened as an ordinary web page there is no Rust side,
+ * so every command would reject and every surface would render empty.
+ * Fall back to fixtures there so the UI can be styled without launching
+ * the app. Both guards matter: `import.meta.env.DEV` removes this from
+ * production output entirely, and the Tauri check means the real app
+ * always uses the real IPC — including when a command legitimately fails.
+ */
+const USE_FIXTURES =
+  import.meta.env.DEV &&
+  typeof window !== "undefined" &&
+  !("__TAURI_INTERNALS__" in window);
+
+function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+  if (USE_FIXTURES) {
+    return import("@/lib/fixtures").then(
+      (m) => m.fixtureFor(cmd) as T,
+    );
+  }
+  return tauriInvoke<T>(cmd, args);
+}
 
 export type Bookmark = {
   id: number;
   url: string;
   title: string;
   created_at: number;
+  /** "bookmark" or "folder". A folder has an empty URL. */
+  kind: "bookmark" | "folder";
+  /** Folder this row lives in; null at the top level. */
+  parent_id: number | null;
 };
 
 export type HistoryEntry = {
@@ -29,21 +57,18 @@ export type BlockedOrigin = {
   created_at: number;
 };
 
-export type ProviderStatus = {
-  anthropic: boolean;
-  openai: boolean;
-  ollama: boolean;
+export type Favicon = {
+  origin: string;
+  data: string;
 };
 
-export type OllamaModel = {
-  name: string;
+export type SearchResult = {
+  title: string;
+  url: string;
+  snippet: string;
 };
 
-export type OllamaStatus = {
-  running: boolean;
-  models: OllamaModel[];
-};
-
+/** A saved clip: a whole page, or a selection from one. */
 export type Artifact = {
   id: number;
   kind: string;
@@ -53,58 +78,27 @@ export type Artifact = {
   markdown: string;
   model: string;
   created_at: number;
-};
-
-export type ArtifactEvent =
-  | { kind: "extracted"; title: string; url: string }
-  | { kind: "chunk"; text: string }
-  | { kind: "saved"; id: number }
-  | { kind: "error"; message: string };
-
-export type ChatEvent =
-  | { kind: "grounded"; title: string; url: string }
-  | { kind: "chunk"; text: string }
-  | { kind: "done" }
-  | { kind: "error"; message: string };
-
-export type SearchResult = {
-  title: string;
-  url: string;
-  snippet: string;
-};
-
-export type Conversation = {
-  id: number;
-  title: string;
-  page_url: string | null;
-  page_title: string | null;
-  created_at: number;
-  updated_at: number;
-};
-
-export type ChatMessageRow = {
-  id: number;
-  conversation_id: number;
-  role: "user" | "assistant";
-  content: string;
-  provider: string | null;
-  model: string | null;
-  created_at: number;
+  /** Path to the markdown mirror in the user's notes directory. */
+  file_path: string | null;
 };
 
 export const ipc = {
   getAppVersion: () => invoke<string>("get_app_version"),
 
-  openTab: (id: string, url: string, top: number) =>
-    invoke<void>("open_tab", { id, url, top }),
+  openTab: (id: string, url: string, rect: ContentRect) =>
+    invoke<void>("open_tab", { id, url, rect }),
   closeTab: (id: string) => invoke<void>("close_tab", { id }),
   activateTab: (id: string) => invoke<void>("activate_tab", { id }),
+  /** Split view: show exactly these tabs, keyboard to `focus`. */
+  activateTabs: (ids: string[], focus: string) =>
+    invoke<void>("activate_tabs", { ids, focus }),
   hideAllTabs: () => invoke<void>("hide_all_tabs"),
   navigateTab: (id: string, url: string) =>
     invoke<void>("navigate_tab", { id, url }),
 
-  resizeContent: (top: number, width: number, height: number) =>
-    invoke<void>("resize_content", { top, width, height }),
+  resizeContent: (rect: ContentRect, only?: string | null) =>
+    invoke<void>("resize_content", { rect, only: only ?? null }),
+  focusShell: () => invoke<void>("focus_shell"),
 
   goBack: (id: string) => invoke<void>("go_back", { id }),
   goForward: (id: string) => invoke<void>("go_forward", { id }),
@@ -117,8 +111,6 @@ export const ipc = {
   removeBookmark: (id: number) => invoke<void>("remove_bookmark", { id }),
   updateBookmark: (id: number, url: string, title: string) =>
     invoke<void>("update_bookmark", { id, url, title }),
-  removeBookmarkByUrl: (url: string) =>
-    invoke<void>("remove_bookmark_by_url", { url }),
   reorderBookmarks: (orderedIds: number[]) =>
     invoke<void>("reorder_bookmarks", { orderedIds }),
   showBookmarkMenu: (id: number) =>
@@ -144,79 +136,33 @@ export const ipc = {
   listBlockedOrigins: () =>
     invoke<BlockedOrigin[]>("list_blocked_origins"),
 
-  aiSetKey: (provider: string, key: string) =>
-    invoke<void>("ai_set_key", { provider, key }),
-  aiProviderStatus: () => invoke<ProviderStatus>("ai_provider_status"),
-  aiOllamaStatus: () => invoke<OllamaStatus>("ai_ollama_status"),
-  aiSend: (
-    provider: string,
-    model: string,
-    prompt: string,
-    conversationId: number | null,
-    onChunk: Channel<string>,
-  ) =>
-    invoke<string>("ai_send", {
-      provider,
-      model,
-      prompt,
-      conversationId,
-      onChunk,
-    }),
-
-  chatCreateConversation: (
-    title: string,
-    pageUrl: string | null,
-    pageTitle: string | null,
-  ) =>
-    invoke<Conversation>("chat_create_conversation", {
-      title,
-      pageUrl,
-      pageTitle,
-    }),
-  chatListConversations: () =>
-    invoke<Conversation[]>("chat_list_conversations"),
-  chatGetMessages: (conversationId: number) =>
-    invoke<ChatMessageRow[]>("chat_get_messages", { conversationId }),
-  chatRenameConversation: (id: number, title: string) =>
-    invoke<void>("chat_rename_conversation", { id, title }),
-  chatDeleteConversation: (id: number) =>
-    invoke<void>("chat_delete_conversation", { id }),
-
   listArtifacts: () => invoke<Artifact[]>("list_artifacts"),
   getArtifact: (id: number) => invoke<Artifact>("get_artifact", { id }),
   deleteArtifact: (id: number) => invoke<void>("delete_artifact", { id }),
-  summarizeCurrentTab: (
-    tabId: string,
-    provider: string,
-    model: string,
-    focus: string | null,
-    onEvent: Channel<ArtifactEvent>,
-  ) =>
-    invoke<number>("summarize_current_tab", {
-      tabId,
-      provider,
-      model,
-      focus,
-      onEvent,
-    }),
   saveCurrentTab: (tabId: string) =>
     invoke<number>("save_current_tab", { tabId }),
-  chatWithPage: (
-    tabId: string,
-    provider: string,
-    model: string,
-    prompt: string,
-    conversationId: number | null,
-    onEvent: Channel<ChatEvent>,
-  ) =>
-    invoke<string>("chat_with_page", {
-      tabId,
-      provider,
-      model,
-      prompt,
-      conversationId,
-      onEvent,
-    }),
+  clipSelection: (tabId: string) =>
+    invoke<number>("clip_selection", { tabId }),
+  getNotesDir: () => invoke<string | null>("get_notes_dir"),
+  createNote: (title: string, sourceUrl: string) =>
+    invoke<Artifact>("create_note", { title, sourceUrl }),
+  updateNote: (id: number, title: string, markdown: string) =>
+    invoke<Artifact | null>("update_note", { id, title, markdown }),
+  listFavicons: () => invoke<Favicon[]>("get_favicons"),
+  groupBookmarks: (target: number, dragged: number) =>
+    invoke<void>("group_bookmarks", { target, dragged }),
+  moveBookmark: (id: number, parent: number | null) =>
+    invoke<void>("move_bookmark", { id, parent }),
+  setTabCornerRadius: (radius: number) =>
+    invoke<void>("set_tab_corner_radius", { radius }),
+  setTabZoom: (id: string, factor: number) =>
+    invoke<void>("set_tab_zoom", { id, factor }),
+  setWindowTheme: (mode: "light" | "dark") =>
+    invoke<void>("set_window_theme", { mode }),
+  openTabDevtools: (id: string) =>
+    invoke<void>("open_tab_devtools", { id }),
+  setGlassMaterial: (appearance: "light" | "dark", level: string) =>
+    invoke<void>("set_glass_material", { appearance, level }),
 
   searchGetInstance: () => invoke<string | null>("search_get_instance"),
   searchSetInstance: (url: string) =>
@@ -225,5 +171,3 @@ export const ipc = {
   searchWeb: (query: string) =>
     invoke<SearchResult[]>("search_web", { query }),
 };
-
-export { Channel };

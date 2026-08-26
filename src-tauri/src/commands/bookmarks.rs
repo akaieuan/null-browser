@@ -26,6 +26,28 @@ pub fn remove_bookmark(storage: State<Storage>, id: i64) -> Result<(), String> {
     storage.remove_bookmark(id).map_err(|e| e.to_string())
 }
 
+/// One pin dropped onto another: fold both into a new folder.
+#[tauri::command]
+pub fn group_bookmarks(
+    storage: State<Storage>,
+    target: i64,
+    dragged: i64,
+) -> Result<(), String> {
+    storage
+        .group_bookmarks(target, dragged)
+        .map_err(|e| e.to_string())
+}
+
+/// Move a pin into a folder, or back to the top level with `null`.
+#[tauri::command]
+pub fn move_bookmark(
+    storage: State<Storage>,
+    id: i64,
+    parent: Option<i64>,
+) -> Result<(), String> {
+    storage.move_bookmark(id, parent).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub fn update_bookmark(
     storage: State<Storage>,
@@ -35,13 +57,6 @@ pub fn update_bookmark(
 ) -> Result<(), String> {
     storage
         .update_bookmark(id, &url, &title)
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-pub fn remove_bookmark_by_url(storage: State<Storage>, url: String) -> Result<(), String> {
-    storage
-        .remove_bookmark_by_url(&url)
         .map_err(|e| e.to_string())
 }
 

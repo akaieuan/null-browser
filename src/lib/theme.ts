@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 
+import { ipc } from "@/lib/ipc";
+
 export type PaletteId =
-  | "neutral"
+  | "aka"
   | "slate"
   | "sand"
   | "0400am"
@@ -17,21 +19,21 @@ export interface Palette {
 }
 
 export const PALETTES: Palette[] = [
-  { id: "neutral", label: "Neutral", swatch: "#2a2a2a" },
+  { id: "aka", label: "aka", swatch: "oklch(0.707 0.108 152.216)" },
   { id: "slate", label: "Slate", swatch: "#334b6b" },
   { id: "sand", label: "Sand", swatch: "#8b6b45" },
   { id: "0400am", label: "0400AM", swatch: "oklch(0.686 0.143 285.656)" },
-  { id: "mudd", label: "Mudd", swatch: "oklch(0.707 0.108 152.216)" },
+  { id: "mudd", label: "Mudd", swatch: "oklch(0.182 0.014 94.03)" },
   { id: "cyberspace", label: "Cyberspace", swatch: "oklch(0.748 0.043 31.264)" },
 ];
 
-export const DEFAULT_PALETTE: PaletteId = "neutral";
+export const DEFAULT_PALETTE: PaletteId = "aka";
 export const DEFAULT_MODE: Mode = "dark";
 
 const PALETTE_KEY = "null.palette";
 const MODE_KEY = "null.mode";
 
-function isPaletteId(id: string | null): id is PaletteId {
+export function isPaletteId(id: string | null): id is PaletteId {
   return !!id && PALETTES.some((t) => t.id === id);
 }
 
@@ -63,6 +65,18 @@ export function applyTheme(palette: PaletteId, mode: Mode): void {
   const root = document.documentElement;
   root.dataset.palette = palette;
   root.dataset.mode = mode;
+
+  // Keep the native window on the same side of light/dark as the
+  // palette. This is what the vibrancy material reads: without it, a
+  // dark palette sits over the light blur variant (or vice versa) and
+  // the glass composites to flat gray fog.
+  //
+  // Through a Rust command, deliberately. The JS `setTheme` API needs
+  // the `core:window:allow-set-theme` capability, which was never
+  // granted — so the previous version of this call rejected silently
+  // for its entire life and nobody saw the glass it was meant to fix.
+  // Custom commands carry their own permission by being registered.
+  ipc.setWindowTheme(mode).catch(() => {});
 }
 
 function persist(palette: PaletteId, mode: Mode): void {

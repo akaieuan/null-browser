@@ -3,6 +3,8 @@
 @theme inline {
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica,
     Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Monaco,
+    "Cascadia Mono", "Courier New", monospace;
 
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -13,46 +15,66 @@
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
   --color-border: var(--border);
+  --color-seam: var(--seam);
+  --color-chrome: var(--chrome);
+  --color-card: var(--card);
   --color-input: var(--input);
   --color-ring: var(--ring);
   --color-subtle: var(--subtle);
+  --color-select: var(--select);
+  --color-danger: var(--danger);
 
-  --radius-lg: 0.5rem;
-  --radius-md: calc(0.5rem - 2px);
-  --radius-sm: calc(0.5rem - 4px);
+  /* Radius scales with the surface, all derived from one knob:
+     cards 12px, buttons 10px, inputs 8px, tags 6px. */
+  --radius-xl: calc(var(--radius) + 2px);
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 4px);
 }
 
-/* ───────────────────────── Neutral (default) ───────────────────────── */
+:root {
+  --radius: 0.625rem;
+}
+
+/* ────────────────────────── aka (default) ──────────────────────────
+   Dark is the reference. One accent: --select. It is the only place a
+   hue is allowed to lead, and it changes hue across modes rather than
+   lightness — the green that reads as "chosen" on the dark ground goes
+   muddy on paper, so light takes a blue instead. */
 
 :root,
-:root[data-palette="neutral"][data-mode="dark"] {
-  --background: #0a0a0a;
-  --foreground: #f5f5f5;
-  --primary: #f5f5f5;
-  --primary-foreground: #0a0a0a;
-  --muted: #171717;
-  --muted-foreground: #a3a3a3;
-  --accent: #262626;
-  --accent-foreground: #f5f5f5;
-  --border: #262626;
-  --input: #171717;
-  --ring: #525252;
-  --subtle: #525252;
+:root[data-palette="aka"][data-mode="dark"] {
+  --background: oklch(0.09 0 0);
+  --foreground: oklch(0.985 0 0);
+  --primary: oklch(0.985 0 0);
+  --primary-foreground: oklch(0.09 0 0);
+  --muted: oklch(0.145 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.2 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --border: oklch(1.000 0.000 0 / 31%);
+  --input: oklch(0.145 0 0);
+  --ring: oklch(0.707 0.108 152.216);
+  --subtle: oklch(0.568 0.000 0);
+  --select: oklch(0.707 0.108 152.216);
+  --danger: oklch(0.637 0.18 25);
 }
 
-:root[data-palette="neutral"][data-mode="light"] {
-  --background: #f7f6f3;
-  --foreground: #1a1a1a;
-  --primary: #1a1a1a;
-  --primary-foreground: #f7f6f3;
-  --muted: #ecebe6;
-  --muted-foreground: #666666;
-  --accent: #e0ded7;
-  --accent-foreground: #1a1a1a;
-  --border: #c7c5bf;
-  --input: #ecebe6;
-  --ring: #6b6b66;
-  --subtle: #9a9a9a;
+:root[data-palette="aka"][data-mode="light"] {
+  --background: oklch(0.97 0.002 106);
+  --foreground: oklch(0.122 0.001 0);
+  --primary: oklch(0.122 0.001 0);
+  --primary-foreground: oklch(0.97 0.002 106);
+  --muted: oklch(0.945 0.004 106);
+  --muted-foreground: oklch(0.46 0.001 0);
+  --accent: oklch(0.905 0.004 106);
+  --accent-foreground: oklch(0.122 0.001 0);
+  --border: oklch(0.684 0.003 106);
+  --input: oklch(0.945 0.004 106);
+  --ring: oklch(0.52 0.13 250);
+  --subtle: oklch(0.541 0.001 0);
+  --select: oklch(0.52 0.13 250);
+  --danger: oklch(0.5 0.19 25);
 }
 
 /* ───────────────────────────── Slate ───────────────────────────── */
@@ -66,10 +88,12 @@
   --muted-foreground: #8ea0b5;
   --accent: #1d2836;
   --accent-foreground: #e6edf5;
-  --border: #1d2836;
+  --border: oklch(0.453 0.030 255);
   --input: #131b24;
-  --ring: #4b5d75;
-  --subtle: #4b5d75;
+  --ring: oklch(0.68 0.12 250);
+  --subtle: oklch(0.589 0.045 256);
+  --select: oklch(0.68 0.12 250);
+  --danger: oklch(0.637 0.18 25);
 }
 
 :root[data-palette="slate"][data-mode="light"] {
@@ -81,10 +105,12 @@
   --muted-foreground: #556779;
   --accent: #d4dde8;
   --accent-foreground: #0b1018;
-  --border: #c4ccd8;
+  --border: oklch(0.686 0.019 258);
   --input: #e5ebf3;
-  --ring: #7a8ba1;
-  --subtle: #98a4b3;
+  --ring: oklch(0.519 0.13 250);
+  --subtle: oklch(0.542 0.026 254);
+  --select: oklch(0.519 0.13 250);
+  --danger: oklch(0.5 0.19 25);
 }
 
 /* ───────────────────────────── Sand ───────────────────────────── */
@@ -98,10 +124,12 @@
   --muted-foreground: #a89c86;
   --accent: #2a231a;
   --accent-foreground: #f3ecde;
-  --border: #2a231a;
+  --border: oklch(0.457 0.019 74);
   --input: #1e1a14;
-  --ring: #7a6548;
-  --subtle: #5c5244;
+  --ring: oklch(0.75 0.1 75);
+  --subtle: oklch(0.591 0.026 76);
+  --select: oklch(0.75 0.1 75);
+  --danger: oklch(0.637 0.18 25);
 }
 
 :root[data-palette="sand"][data-mode="light"] {
@@ -113,10 +141,12 @@
   --muted-foreground: #6e5c44;
   --accent: #dcd0b6;
   --accent-foreground: #2a231a;
-  --border: #c4b89a;
+  --border: oklch(0.676 0.043 89);
   --input: #ebe3d0;
-  --ring: #8b6b45;
-  --subtle: #a89c86;
+  --ring: oklch(0.513 0.110 60);
+  --subtle: oklch(0.533 0.034 83);
+  --select: oklch(0.513 0.110 60);
+  --danger: oklch(0.5 0.19 25);
 }
 
 /* ───────────────────────────── 0400AM ───────────────────────────── */
@@ -126,14 +156,21 @@
   --foreground: oklch(0.985 0 0);
   --primary: oklch(0.686 0.143 285.656);
   --primary-foreground: oklch(0.132 0.004 17.686);
-  --muted: oklch(0.325 0.119 280.647);
-  --muted-foreground: oklch(0.824 0.029 305.975);
+  /* Was oklch(0.325 0.119 280.647): darker than its own background and
+     six times its chroma, so the URL bar and every selected row landed
+     as a saturated purple slab instead of a surface. Same fault as this
+     palette's light block. A surface is a short step from the ground it
+     sits on and borrows its hue at low chroma. */
+  --muted: oklch(0.492 0.026 289.019);
+  --muted-foreground: oklch(0.827 0.029 305.975);
   --accent: oklch(0.437 0.106 285.256);
   --accent-foreground: oklch(0.698 0.012 17.438);
-  --border: oklch(0.397 0.059 291.351);
-  --input: oklch(0.325 0.119 280.647);
-  --ring: oklch(0.642 0.105 158.022);
-  --subtle: oklch(0.55 0.06 285);
+  --border: oklch(0.670 0.059 291);
+  --input: oklch(0.492 0.026 289.019);
+  --ring: oklch(0.886 0.1 158.022);
+  --subtle: oklch(0.827 0.060 285);
+  --select: oklch(0.886 0.1 158.022);
+  --danger: oklch(0.78 0.15 25);
 }
 
 :root[data-palette="0400am"][data-mode="light"] {
@@ -141,14 +178,19 @@
   --foreground: oklch(0.102 0.007 18.316);
   --primary: oklch(0.097 0.001 0);
   --primary-foreground: oklch(0.998 0.001 17.176);
-  --muted: oklch(0.589 0.036 311.535);
-  --muted-foreground: oklch(0.159 0.001 0);
+  /* Was 0.589 — a mid-tone, not a surface. Every other palette keeps
+     --muted within ~0.03 of its --background; this one sat 0.29 away,
+     which is why the accent measured 1.76:1 on it. */
+  --muted: oklch(0.845 0.03 311.535);
+  --muted-foreground: oklch(0.4 0.02 311);
   --accent: oklch(0.605 0.254 299.587);
   --accent-foreground: oklch(1 0.001 0);
-  --border: oklch(0.78 0.02 311);
-  --input: oklch(0.78 0.04 311);
-  --ring: oklch(0.605 0.254 299.587);
+  --border: oklch(0.614 0.020 311);
+  --input: oklch(0.845 0.03 311.535);
+  --ring: oklch(0.476 0.22 299.587);
   --subtle: oklch(0.45 0.03 311);
+  --select: oklch(0.476 0.22 299.587);
+  --danger: oklch(0.5 0.19 25);
 }
 
 /* ───────────────────────────── Mudd ───────────────────────────── */
@@ -162,10 +204,12 @@
   --muted-foreground: oklch(0.708 0 0);
   --accent: oklch(0.371 0 0);
   --accent-foreground: oklch(0.985 0 0);
-  --border: oklch(1 0 0 / 15%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
-  --subtle: oklch(0.5 0 0);
+  --border: oklch(1.000 0.000 0 / 29%);
+  --input: oklch(0.269 0 0);
+  --ring: oklch(0.707 0.108 152.216);
+  --subtle: oklch(0.592 0.000 0);
+  --select: oklch(0.707 0.108 152.216);
+  --danger: oklch(0.637 0.18 25);
 }
 
 :root[data-palette="mudd"][data-mode="light"] {
@@ -177,13 +221,15 @@
   --muted-foreground: oklch(0.464 0.001 0);
   --accent: oklch(0.733 0.059 144.941);
   --accent-foreground: oklch(0.122 0.001 0);
-  --border: oklch(0.7 0.008 106);
+  --border: oklch(0.603 0.008 106);
   --input: oklch(0.78 0.02 106);
-  --ring: oklch(0.55 0.05 150);
-  --subtle: oklch(0.55 0.001 0);
+  --ring: oklch(0.389 0.100 152);
+  --subtle: oklch(0.466 0.001 0);
+  --select: oklch(0.389 0.100 152);
+  --danger: oklch(0.5 0.19 25);
 }
 
-/* ───────────────────────────── Cyberspace ───────────────────────────── */
+/* ─────────────────────────── Cyberspace ─────────────────────────── */
 
 :root[data-palette="cyberspace"][data-mode="dark"] {
   --background: oklch(0 0 0);
@@ -194,10 +240,12 @@
   --muted-foreground: oklch(0.772 0.049 89.603);
   --accent: oklch(0.336 0.091 339.328);
   --accent-foreground: oklch(0.822 0.038 1.14);
-  --border: oklch(0.351 0.066 5.107);
+  --border: oklch(0.439 0.066 5);
   --input: oklch(0.267 0.003 17.343);
   --ring: oklch(0.668 0.121 5.386);
-  --subtle: oklch(0.5 0.03 89);
+  --subtle: oklch(0.566 0.030 89);
+  --select: oklch(0.668 0.121 5.386);
+  --danger: oklch(0.637 0.18 25);
 }
 
 :root[data-palette="cyberspace"][data-mode="light"] {
@@ -209,10 +257,87 @@
   --muted-foreground: oklch(0.505 0.021 17.859);
   --accent: oklch(0.74 0.112 5.078);
   --accent-foreground: oklch(0.109 0.003 17.623);
-  --border: oklch(0.78 0.015 17);
+  --border: oklch(0.646 0.015 17);
   --input: oklch(0.85 0.015 17);
-  --ring: oklch(0.534 0.071 19.687);
-  --subtle: oklch(0.55 0.02 17);
+  --ring: oklch(0.462 0.075 20);
+  --subtle: oklch(0.509 0.020 17);
+  --select: oklch(0.462 0.075 20);
+  --danger: oklch(0.5 0.19 25);
+}
+
+/* ─────────────────────────── seam ───────────────────────────
+   `--border` is a *control* boundary: the edge of an input, an outline
+   button, a popover. It is audited at 2.55:1 against the ground because
+   WCAG 1.4.11 asks a control's edge to be findable.
+
+   Applying that same 2.55:1 line to every list row is what made the
+   interface look like a spreadsheet. A rule between two rows of text is
+   not a control boundary and 1.4.11 does not cover it — the rows are
+   already distinguished by their content. Almost all of those rules are
+   now gone, replaced by space and a hover fill.
+
+   `--seam` is for the handful that remain: a division that has to be
+   visible against arbitrary page content, where a tone step cannot
+   reach. Deliberately not audited, deliberately alpha so it composites
+   onto whatever surface it lands on, and deliberately quiet enough that
+   you have to look for it. One pair of rules covers all twelve palettes:
+   a seam is a shade of the ground, and every dark ground wants white,
+   every light ground black. */
+:root {
+  --seam: oklch(1 0 0 / 7%);
+}
+
+:root[data-mode="light"] {
+  --seam: oklch(0 0 0 / 8%);
+}
+
+/* ────────────────────────── chrome ──────────────────────────
+   The ground everything non-content sits on: sidebar, toolbar,
+   gutters. Content (Home, panels, Notes) floats on it as `--card`
+   surfaces; live pages are native webviews and always opaque.
+
+   Two renderings, one pair of tokens. In a plain browser (dev server,
+   screenshots) chrome is the solid `--muted` and cards are the solid
+   `--background`. In the app, `main.tsx` sets `data-vibrancy` and both
+   become washes over the window vibrancy — the palette keeps its
+   identity, the desktop supplies the depth. Components only ever say
+   `bg-chrome` / `bg-card`. */
+:root {
+  --chrome: var(--muted);
+  --card: var(--background);
+}
+
+:root[data-vibrancy] {
+  /* Thin tints, not paint. The glass lives or dies on these numbers:
+     at 45% the wash reads as a flat gray field with the blur as a
+     rumour behind it. The blur itself comes from the native material —
+     the DOM's only job is to keep the palette's identity present
+     without suffocating the desktop. */
+  --chrome: color-mix(in oklab, var(--muted) 28%, transparent);
+  /* Cards go translucent too — the blank tab and the panels are where
+     the glass is actually *seen*, because they are the largest
+     surfaces. */
+  --card: color-mix(in oklab, var(--background) 70%, transparent);
+}
+
+:root[data-vibrancy] body {
+  background: transparent;
+}
+
+/* Glass strength, set from Settings. `clear` is the Zen look — mostly
+   wallpaper; `solid` opts out entirely and nothing shows through. */
+:root[data-vibrancy][data-glass="clear"] {
+  --chrome: color-mix(in oklab, var(--muted) 10%, transparent);
+  --card: color-mix(in oklab, var(--background) 45%, transparent);
+}
+
+:root[data-vibrancy][data-glass="solid"] {
+  --chrome: var(--muted);
+  --card: var(--background);
+}
+
+:root[data-vibrancy][data-glass="solid"] body {
+  background: var(--muted);
 }
 
 html,
@@ -224,9 +349,16 @@ body,
 body {
   margin: 0;
   font-family: var(--font-sans);
+  background: var(--background);
+  color: var(--foreground);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
+}
+
+/* Selected text takes the accent — the one place a hue leads. */
+::selection {
+  background: color-mix(in srgb, var(--select) 30%, transparent);
 }
 
 /* Top progress bar: asymptotic 0→90% for the "fake" indeterminate feel.
@@ -243,6 +375,19 @@ body {
   }
   100% {
     width: 90%;
+  }
+}
+
+/* Notes card entrance: space moves, brightness doesn't. */
+@keyframes np-drop {
+  from {
+    transform: translateY(-6px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-\[np-drop_160ms_ease-out\] {
+    animation: none;
   }
 }
 

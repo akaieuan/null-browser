@@ -2,78 +2,44 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
+  ArrowLeftRight,
   ChevronLeft,
   ChevronRight,
-  History as HistoryIcon,
+  Columns2,
+  NotebookText,
+  PanelLeft,
   Plus,
   RotateCw,
-  Settings as SettingsIcon,
-  Activity,
-  Sparkles,
   Star,
-  User,
-  X,
 } from "lucide-react";
-import {
-  closestCenter,
-  DndContext,
-  DragOverlay,
-  KeyboardSensor,
-  PointerSensor,
-  useSensor,
-  useSensors,
-  type DragEndEvent,
-  type DragStartEvent,
-} from "@dnd-kit/core";
-import {
-  arrayMove,
-  horizontalListSortingStrategy,
-  SortableContext,
-  sortableKeyboardCoordinates,
-  useSortable,
-} from "@dnd-kit/sortable";
-import { CSS } from "@dnd-kit/utilities";
 
 import { Button } from "@/components/ui/button";
-import { AIDrawer } from "@/components/panels/AIDrawer";
+import { Home } from "@/components/Home";
+import { Sidebar, type Selection, type Tab } from "@/components/Sidebar";
+import { NotesPanel } from "@/components/panels/NotesPanel";
 import { HistoryPanel } from "@/components/panels/HistoryPanel";
 import { NetworkInspector } from "@/components/panels/NetworkInspector";
-import { ProfileMenu } from "@/components/panels/ProfileMenu";
 import { SettingsPanel } from "@/components/panels/SettingsPanel";
 import { TopProgress } from "@/components/TopProgress";
-import { ipc, type Bookmark } from "@/lib/ipc";
-import { AI_DRAWER_WIDTH } from "@/lib/layout";
-import { usePreferences, resolveStartUrl } from "@/lib/preferences";
-import { type Mode, type PaletteId, useTheme } from "@/lib/theme";
+import { ipc, type Artifact, type Bookmark } from "@/lib/ipc";
+import {
+  contentRect,
+  notesWidthFor,
+  pageWidthIfSidebarOpen,
+  PAGE_GUTTER,
+  PROGRESS_HEIGHT,
+  SIDEBAR_COLLAPSE_PAGE_WIDTH,
+  SIDEBAR_DEFAULT_WIDTH,
+  SIDEBAR_RESTORE_PAGE_WIDTH,
+  splitRects,
+  TOOLBAR_HEIGHT,
+  TRAFFIC_LIGHT_INSET,
+  type ContentRect,
+} from "@/lib/layout";
+import { CORNERS, usePreferences, resolveStartUrl } from "@/lib/preferences";
+import { isPaletteId, type Mode, type PaletteId, useTheme } from "@/lib/theme";
 import { resolveQuery } from "@/lib/url";
 import { cn } from "@/lib/utils";
-
-// Tab strip + toolbar.
-const NAV_BARS_HEIGHT = 80;
-const TAB_STRIP_HEIGHT = 36;
-const BOOKMARK_BAR_HEIGHT = 32;
-// Thin strip reserved at the bottom of the top bar for the page-load
-// progress line. Always reserved so starting a load doesn't re-lay out
-// the native content webview.
-const PROGRESS_BAR_HEIGHT = 2;
-
-// Reserved for the profile dropdown so the active tab's webview doesn't
-// clip it. Matches w-80 card + outer padding.
-const PROFILE_STRIP_WIDTH = 336;
-
-
-// With `titleBarStyle: Overlay` on macOS, the traffic lights are drawn on top
-// of our custom top bar in the top-left. Pad so nothing lands under them.
-const isMac =
-  typeof navigator !== "undefined" && /Mac/i.test(navigator.userAgent);
-const TRAFFIC_LIGHT_INSET = isMac ? 76 : 8;
-
-type Tab = {
-  id: string;
-  url: string;
-  title: string;
-  hasWebview: boolean;
-};
 
 const BLANK_URL = "about:blank";
 
@@ -93,85 +59,241 @@ function hostnameFor(url: string): string {
   }
 }
 
+function blankTab(): Tab {
+  return { id: uuid(), url: BLANK_URL, title: "New Tab", hasWebview: false };
+}
+
 function App() {
-  const [tabs, setTabs] = useState<Tab[]>([]);
-  const [activeId, setActiveId] = useState<string | null>(null);
+  // `tabs` is never empty — a blank tab stands in for the zero-tab state,
+  // which kills the `activeId: null` branch everywhere downstream.
+  const [tabs, setTabs] = useState<Tab[]>(() => [blankTab()]);
+  const [activeId, setActiveId] = useState<string>(() => "");
   const [input, setInput] = useState("");
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
-  const [draggingBookmarkId, setDraggingBookmarkId] = useState<number | null>(
-    null,
-  );
-  const [showAiDrawer, setShowAiDrawer] = useState(false);
-  const [showSettings, setShowSettings] = useState(false);
-  const [showHistory, setShowHistory] = useState(false);
-  const [showNetwork, setShowNetwork] = useState(false);
-  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+  const [selection, setSelection] = useState<Selection>({ kind: "tab" });
+  /**
+   * Notes region: closed, a narrow card dropped in under the toolbar's
+   * Notes button, or widened to half the window (a split with the
+   * page). Independent of `selection` — Notes can sit beside History
+   * the way it sits beside a page.
+   */
+  const [notesMode, setNotesMode] = useState<null | "panel" | "wide">(null);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [autoCollapsed, setAutoCollapsed] = useState(false);
   const [loadingTabs, setLoadingTabs] = useState<Set<string>>(new Set());
-  const { setPalette, setMode } = useTheme();
-  const { startPage, searchEngine } = usePreferences();
+  const [openClip, setOpenClip] = useState<Artifact | null>(null);
+  /** Split divider position: left pane's share of the pane space. */
+  const [splitRatio, setSplitRatio] = useState(0.5);
+  /** Window width as state, so divider geometry re-derives on resize. */
+  const [winW, setWinW] = useState(() => window.innerWidth);
+
+  // Hover-reveal bookkeeping. Refs, not state: the timers and the
+  // "this open was the pointer's doing" flag change nothing visible by
+  // themselves, so they must not cause renders.
+  const hoverTimerRef = useRef<number | null>(null);
+  const hoverCloseTimerRef = useRef<number | null>(null);
+  const hoverRevealedRef = useRef(false);
+
+  /**
+   * Split view: the fixed pair of panes, left then right. `activeId`
+   * decides which of the two owns the keyboard and the URL bar —
+   * activating the other pane swaps focus without dissolving the pair;
+   * activating a third tab, closing either pane, or losing either
+   * webview dissolves it (the effect below enforces all three).
+   */
+  const [splitPair, setSplitPair] = useState<[string, string] | null>(null);
+  const splitPairRef = useRef(splitPair);
+  useEffect(() => {
+    splitPairRef.current = splitPair;
+  }, [splitPair]);
+  const splitRatioRef = useRef(0.5);
+  useEffect(() => {
+    splitRatioRef.current = splitRatio;
+  }, [splitRatio]);
+
+  /** Per-tab page zoom (⌘+/⌘−/⌘0). Ref: nothing renders it. */
+  const zoomRef = useRef<Map<string, number>>(new Map());
+
+  /**
+   * Native-frame tween engine. The panes are native webviews, so
+   * "fluid motion" means streaming interpolated frames over IPC at
+   * display rate — CSS cannot touch them. Each tab has at most one
+   * running tween; a new target cancels the old mid-flight and
+   * continues from wherever the frame actually is, so re-targeting
+   * (open Notes while a split settles) stays continuous.
+   */
+  const lastFramesRef = useRef<Map<string, ContentRect>>(new Map());
+  const tweensRef = useRef<Map<string, number>>(new Map());
+  const dividerDraggingRef = useRef(false);
+  const sendFrame = useCallback((id: string, r: ContentRect) => {
+    lastFramesRef.current.set(id, r);
+    ipc.resizeContent(r, id).catch(() => {});
+  }, []);
+  const tweenFrame = useCallback(
+    (id: string, to: ContentRect, ms = 220, onDone?: () => void) => {
+      const from = lastFramesRef.current.get(id);
+      const reduced = window.matchMedia(
+        "(prefers-reduced-motion: reduce)",
+      ).matches;
+      const prev = tweensRef.current.get(id);
+      if (prev) cancelAnimationFrame(prev);
+      if (!from || reduced) {
+        sendFrame(id, to);
+        onDone?.();
+        return;
+      }
+      const t0 = performance.now();
+      const ease = (x: number) => 1 - (1 - x) ** 3;
+      const lerp = (a: number, b: number, t: number) =>
+        Math.round(a + (b - a) * t);
+      const tick = (now: number) => {
+        const t = ease(Math.min(1, (now - t0) / ms));
+        sendFrame(id, {
+          left: lerp(from.left, to.left, t),
+          top: lerp(from.top, to.top, t),
+          width: lerp(from.width, to.width, t),
+          height: lerp(from.height, to.height, t),
+        });
+        if (t < 1) {
+          tweensRef.current.set(id, requestAnimationFrame(tick));
+        } else {
+          tweensRef.current.delete(id);
+          onDone?.();
+        }
+      };
+      tweensRef.current.set(id, requestAnimationFrame(tick));
+    },
+    [sendFrame],
+  );
+
+  /**
+   * A sidebar drag is currently hovering the page area. The page
+   * yields its right half and a drop target renders in the vacated
+   * space — "where this will go" is shown, not guessed. React cannot
+   * paint over the native page, so the page has to move; that IS the
+   * preview.
+   */
+  const [splitDropHint, setSplitDropHint] = useState(false);
+  useEffect(() => {
+    if (splitPair) return; // an existing split owns the frames
+    if (selection.kind !== "tab" || !activeTab?.hasWebview) return;
+    if (splitDropHint) {
+      tweenFrame(activeTab.id, splitRects(rectNow())[0], 180);
+    } else {
+      tweenFrame(activeTab.id, rectNow(), 180);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [splitDropHint]);
+
+  /**
+   * Toggling Notes always returns it to the list.
+   *
+   * `openClip` is set only when something hands the surface a specific
+   * note to show (Home does, and a menu capture does). Leaving it set
+   * while Notes is closed meant reopening remounted straight back into
+   * a note the user had already navigated away from. The toggle is
+   * never the thing that opens a specific note, so clearing it here is
+   * always right.
+   */
+  const toggleNotes = useCallback(() => {
+    setOpenClip(null);
+    setNotesMode((cur) => (cur === null ? "panel" : null));
+  }, []);
+  const toggleNotesRef = useRef(toggleNotes);
+  toggleNotesRef.current = toggleNotes;
+
+  const { mode: themeMode, setPalette, setMode } = useTheme();
+  const { startPage, searchEngine, corners, glass, hoverReveal } =
+    usePreferences();
+
+  // The Corners preference drives one CSS knob and the native page
+  // cards through one Rust call — chrome and page cannot disagree.
+  useEffect(() => {
+    const c = CORNERS.find((x) => x.id === corners) ?? CORNERS[1];
+    document.documentElement.style.setProperty("--radius", c.radius);
+    ipc.setTabCornerRadius(c.nativeRadius).catch(() => {});
+  }, [corners]);
+
+  // Glass strength: a data attribute the stylesheet keys on for the
+  // tint, plus the native material under the window — the material's
+  // own scrim decides most of what "glassy" means.
+  useEffect(() => {
+    document.documentElement.dataset.glass = glass;
+    ipc.setGlassMaterial(themeMode, glass).catch(() => {});
+  }, [glass, themeMode]);
   const inputRef = useRef<HTMLInputElement>(null);
   const focusedRef = useRef(false);
 
-  const activeTab = tabs.find((t) => t.id === activeId) ?? null;
-  const hasActiveWebview = activeTab?.hasWebview ?? false;
-  const modalOpen = showSettings || showHistory || showNetwork;
-  const showLanding = !modalOpen && (!activeTab || !activeTab.hasWebview);
-  const showBookmarkBar = bookmarks.length > 0;
+  // Mirrors of state for callbacks that must read the latest value
+  // without being re-created. Every Tauri `listen()` registration is an
+  // async IPC round trip while its cleanup unregisters synchronously,
+  // so a listener whose effect re-runs on each state change leaves a
+  // window with nothing registered — during which keystrokes are simply
+  // dropped. These let the listeners register once, with `[]`.
+  const tabsRef = useRef<Tab[]>(tabs);
+  const activeIdRef = useRef(activeId);
+  const selectionRef = useRef<Selection>(selection);
+  const bookmarksRef = useRef<Bookmark[]>(bookmarks);
+  useEffect(() => {
+    tabsRef.current = tabs;
+  }, [tabs]);
+  useEffect(() => {
+    activeIdRef.current = activeId;
+  }, [activeId]);
+  useEffect(() => {
+    selectionRef.current = selection;
+  }, [selection]);
+  useEffect(() => {
+    bookmarksRef.current = bookmarks;
+  }, [bookmarks]);
 
-  const topBarHeight =
-    NAV_BARS_HEIGHT +
-    (showBookmarkBar ? BOOKMARK_BAR_HEIGHT : 0) +
-    PROGRESS_BAR_HEIGHT;
+  // Seed the active id once the first blank tab exists.
+  useEffect(() => {
+    if (!activeId && tabs.length > 0) setActiveId(tabs[0].id);
+  }, [activeId, tabs]);
+
+  const activeTab = tabs.find((t) => t.id === activeId) ?? tabs[0] ?? null;
+  const hasActiveWebview = activeTab?.hasWebview ?? false;
+  const panelOpen = selection.kind !== "tab";
+  const showHome = !panelOpen && !hasActiveWebview;
+
+  const sidebarWidth = SIDEBAR_DEFAULT_WIDTH;
+  const effectiveSidebarOpen = sidebarOpen && !autoCollapsed;
 
   const activeLoading =
-    activeId !== null && hasActiveWebview && loadingTabs.has(activeId);
+    hasActiveWebview && activeId !== "" && loadingTabs.has(activeId);
 
   const activeBookmark = useMemo(() => {
     if (!activeTab || !activeTab.hasWebview) return null;
     return bookmarks.find((b) => b.url === activeTab.url) ?? null;
   }, [activeTab, bookmarks]);
 
-  const draggingBookmark = useMemo(
-    () => bookmarks.find((b) => b.id === draggingBookmarkId) ?? null,
-    [bookmarks, draggingBookmarkId],
+  /** Width the Notes region currently takes (0 when closed). */
+  const notesWidth = notesWidthFor(
+    notesMode,
+    winW,
+    sidebarWidth,
+    effectiveSidebarOpen,
   );
 
-  const dndSensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  /** The page frame, from the one source of geometry truth. `notesWidth`
+      is a real dependency: opening or widening Notes must re-frame the
+      native page, and every geometry effect keys off this callback. */
+  const rectNow = useCallback(
+    () =>
+      contentRect({
+        winW: window.innerWidth,
+        winH: window.innerHeight,
+        sidebarWidth,
+        sidebarOpen: effectiveSidebarOpen,
+        notesWidth,
+      }),
+    [sidebarWidth, effectiveSidebarOpen, notesWidth],
   );
 
-  const handleBookmarkDragStart = useCallback((e: DragStartEvent) => {
-    setDraggingBookmarkId(Number(e.active.id));
-  }, []);
-
-  const handleBookmarkDragEnd = useCallback((e: DragEndEvent) => {
-    setDraggingBookmarkId(null);
-    const { active, over } = e;
-    if (!over || active.id === over.id) return;
-    setBookmarks((prev) => {
-      const oldIdx = prev.findIndex((b) => b.id === active.id);
-      const newIdx = prev.findIndex((b) => b.id === over.id);
-      if (oldIdx < 0 || newIdx < 0) return prev;
-      const next = arrayMove(prev, oldIdx, newIdx);
-      ipc
-        .reorderBookmarks(next.map((b) => b.id))
-        .catch(() => {
-          ipc.listBookmarks().then(setBookmarks).catch(() => {});
-        });
-      return next;
-    });
-  }, []);
-
-  const handleBookmarkDragCancel = useCallback(() => {
-    setDraggingBookmarkId(null);
-  }, []);
-
-  // Explicit window-drag handler. The `data-tauri-drag-region` attribute
-  // can be flaky depending on Tauri version and WebView; calling
-  // startDragging() directly is always reliable. Opt out when the click
-  // target is interactive (button/input/form) or an ancestor is marked
-  // data-tauri-drag-region="false".
+  // Window-drag. The attribute alone is flaky across Tauri/WebView
+  // versions; calling startDragging() is reliable. Opt out when the
+  // target is interactive or an ancestor is marked opted-out.
   const handleChromeMouseDown = useCallback((e: React.MouseEvent) => {
     if (e.button !== 0) return;
     let node = e.target as HTMLElement | null;
@@ -192,21 +314,53 @@ function App() {
     getCurrentWindow().startDragging().catch(() => {});
   }, []);
 
-  // Load bookmarks on mount.
   useEffect(() => {
     ipc.listBookmarks().then(setBookmarks).catch(() => {});
-  }, []);
-
-  useEffect(() => {
     inputRef.current?.focus();
   }, []);
 
+  // Captured favicons, keyed by origin. Loaded once; kept fresh by the
+  // `favicon-set` events the ingest path emits as pages are visited.
+  const [favicons, setFavicons] = useState<Map<string, string>>(
+    () => new Map(),
+  );
+  useEffect(() => {
+    ipc
+      .listFavicons()
+      .then((rows) =>
+        setFavicons(new Map(rows.map((r) => [r.origin, r.data]))),
+      )
+      .catch(() => {});
+    const promise = listen<{ origin: string; data: string }>(
+      "favicon-set",
+      (e) => {
+        setFavicons((prev) =>
+          new Map(prev).set(e.payload.origin, e.payload.data),
+        );
+      },
+    );
+    return () => {
+      promise.then((off) => off());
+    };
+  }, []);
+  const iconFor = useCallback(
+    (url: string): string | null => {
+      try {
+        return favicons.get(new URL(url).origin) ?? null;
+      } catch {
+        return null;
+      }
+    },
+    [favicons],
+  );
+
+
   useEffect(() => {
     const palettePromise = listen<PaletteId>("palette-set", (e) => {
-      setPalette(e.payload);
+      if (isPaletteId(e.payload)) setPalette(e.payload);
     });
     const modePromise = listen<Mode>("mode-set", (e) => {
-      setMode(e.payload);
+      if (e.payload === "light" || e.payload === "dark") setMode(e.payload);
     });
     return () => {
       palettePromise.then((off) => off());
@@ -214,54 +368,114 @@ function App() {
     };
   }, [setPalette, setMode]);
 
-  // Resize + reposition content webview any time the window resizes, the
-  // top bar's height changes (bookmarks bar appearing), the AI drawer
-  // toggles, or the profile dropdown opens (each reserves a right strip).
+  // Keep every tab webview at the computed frame. Chrome height is now
+  // constant, so this fires only on window resize, sidebar toggle and
+  // drawer toggle — never because a second tab or a bookmark appeared.
   useEffect(() => {
-    const sync = () =>
-      ipc
-        .resizeContent(
-          topBarHeight,
-          window.innerWidth -
-            (showAiDrawer ? AI_DRAWER_WIDTH : 0) -
-            (profileMenuOpen ? PROFILE_STRIP_WIDTH : 0),
-          window.innerHeight - topBarHeight,
-        )
-        .catch(() => {});
+    const sync = () => {
+      const w = window.innerWidth;
+      setWinW(w);
+      const wouldBe = pageWidthIfSidebarOpen(w, sidebarWidth, notesWidth);
+      setAutoCollapsed((cur) => {
+        if (!cur && sidebarOpen && wouldBe < SIDEBAR_COLLAPSE_PAGE_WIDTH) {
+          return true;
+        }
+        if (cur && wouldBe >= SIDEBAR_RESTORE_PAGE_WIDTH) return false;
+        return cur;
+      });
+      const pair = splitPairRef.current;
+      if (pair) {
+        const [ra, rb] = splitRects(rectNow(), splitRatioRef.current);
+        sendFrame(pair[0], ra);
+        sendFrame(pair[1], rb);
+      } else {
+        ipc.resizeContent(rectNow()).catch(() => {});
+        // Keep the tween engine's notion of "where the frame is" true,
+        // or the next animation would launch from a stale rect.
+        lastFramesRef.current.set(activeIdRef.current, rectNow());
+      }
+    };
     window.addEventListener("resize", sync);
     sync();
     return () => window.removeEventListener("resize", sync);
-  }, [topBarHeight, showAiDrawer, profileMenuOpen]);
+  }, [rectNow, sidebarWidth, sidebarOpen, notesWidth]);
 
-  // Full-screen modals hide all tabs; closing them reactivates the tab.
+  // Panels take over the content column, so the native page must hide —
+  // React cannot paint over a native child webview.
   useEffect(() => {
-    if (modalOpen) {
+    if (panelOpen) {
       ipc.hideAllTabs().catch(() => {});
-    } else if (activeId) {
-      const tab = tabs.find((t) => t.id === activeId);
-      if (tab?.hasWebview) ipc.activateTab(activeId).catch(() => {});
+    } else if (activeTab?.hasWebview) {
+      ipc.activateTab(activeTab.id).catch(() => {});
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [modalOpen]);
+  }, [panelOpen]);
+
+  // Split view owns pane visibility and frames while a pair exists.
+  // It runs after the effects above, so whatever a single-tab path
+  // just did (activate one, hide all) is corrected to the pair state.
+  // When the pair dissolves, every tab is put back on the full rect.
+  //
+  // Frame changes tween — entering a split slides the page over
+  // rather than teleporting it — except while the divider is being
+  // dragged, when the pointer IS the animation. After a tween lands,
+  // one broadcast resize snaps every hidden tab to the current rect so
+  // activating one later doesn't reveal a stale frame.
+  useEffect(() => {
+    if (!splitPair) {
+      if (activeTab?.hasWebview && !panelOpen) {
+        tweenFrame(activeTab.id, rectNow(), 220, () => {
+          ipc.resizeContent(rectNow()).catch(() => {});
+        });
+      } else {
+        ipc.resizeContent(rectNow()).catch(() => {});
+      }
+      return;
+    }
+    const [pa, pb] = splitPair;
+    const a = tabs.find((t) => t.id === pa);
+    const b = tabs.find((t) => t.id === pb);
+    if (!a?.hasWebview || !b?.hasWebview) {
+      setSplitPair(null);
+      return;
+    }
+    if (activeId !== pa && activeId !== pb) {
+      // The user went somewhere else entirely; the split is over.
+      setSplitPair(null);
+      return;
+    }
+    if (panelOpen) return; // both panes stay hidden under the panel
+    const [ra, rb] = splitRects(rectNow(), splitRatio);
+    if (dividerDraggingRef.current) {
+      sendFrame(pa, ra);
+      sendFrame(pb, rb);
+    } else {
+      tweenFrame(pa, ra);
+      tweenFrame(pb, rb);
+    }
+    ipc.activateTabs([pa, pb], activeId).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [splitPair, splitRatio, activeId, panelOpen, tabs, rectNow]);
 
   useEffect(() => {
-    const promise = listen<{ id: string; url: string }>("tab-updated", (e) => {
-      const { id, url } = e.payload;
-      const title = hostnameFor(url);
-      setTabs((prev) =>
-        prev.map((t) => (t.id === id ? { ...t, url, title } : t)),
-      );
-      if (id === activeId && !focusedRef.current) setInput(url);
-      // Local history: every finished page load, URL + title go to SQLite.
-      // Skip about:* and data: URLs — those aren't real visits.
-      if (url && !/^about:|^data:/i.test(url)) {
-        ipc.addHistory(url, title).catch(() => {});
-      }
-    });
+    const promise = listen<{ id: string; url: string; title?: string | null }>(
+      "tab-updated",
+      (e) => {
+        const { id, url, title } = e.payload;
+        const resolved = title?.trim() || hostnameFor(url);
+        setTabs((prev) =>
+          prev.map((t) => (t.id === id ? { ...t, url, title: resolved } : t)),
+        );
+        if (id === activeIdRef.current && !focusedRef.current) setInput(url);
+        if (url && !/^about:|^data:/i.test(url)) {
+          ipc.addHistory(url, resolved).catch(() => {});
+        }
+      },
+    );
     return () => {
       promise.then((off) => off());
     };
-  }, [activeId]);
+  }, []);
 
   useEffect(() => {
     const promise = listen<{ id: string; state: "started" | "finished" }>(
@@ -283,74 +497,123 @@ function App() {
 
   const navigateTo = useCallback(
     async (url: string) => {
-      if (!activeId) {
-        const id = uuid();
-        await ipc.openTab(id, url, topBarHeight);
-        await ipc.activateTab(id);
-        setTabs((prev) => [
-          ...prev,
-          { id, url, title: hostnameFor(url), hasWebview: true },
-        ]);
-        setActiveId(id);
-        setInput(url);
-        return;
-      }
       const tab = tabs.find((t) => t.id === activeId);
       if (!tab) return;
+      setSelection({ kind: "tab" });
       if (tab.hasWebview) {
-        await ipc.navigateTab(activeId, url);
+        await ipc.navigateTab(tab.id, url);
       } else {
-        await ipc.openTab(activeId, url, topBarHeight);
-        await ipc.activateTab(activeId);
+        await ipc.openTab(tab.id, url, rectNow());
+        await ipc.activateTab(tab.id);
       }
       setTabs((prev) =>
         prev.map((t) =>
-          t.id === activeId
+          t.id === tab.id
             ? { ...t, url, title: hostnameFor(url), hasWebview: true }
             : t,
         ),
       );
       setInput(url);
     },
-    [activeId, tabs, topBarHeight],
+    [activeId, tabs, rectNow],
   );
 
   const openNewTab = useCallback(
     async (url?: string) => {
       const resolved = url ?? resolveStartUrl(startPage) ?? BLANK_URL;
+
+      // A blank tab is not yet anything. Opening a second one stacks an
+      // identical, indistinguishable "New Tab" row in the sidebar — the
+      // clutter every vertical-tab browser has to design away. If one is
+      // already open and empty, go to it instead of making another.
+      if (resolved === BLANK_URL) {
+        const blank = tabsRef.current.find((t) => !t.hasWebview);
+        if (blank) {
+          setSelection({ kind: "tab" });
+          await ipc.hideAllTabs();
+          setActiveId(blank.id);
+          setInput("");
+          inputRef.current?.focus();
+          return;
+        }
+      }
+
       const id = uuid();
       const hasWebview = resolved !== BLANK_URL;
+      setSelection({ kind: "tab" });
       if (hasWebview) {
-        await ipc.openTab(id, resolved, topBarHeight);
+        await ipc.openTab(id, resolved, rectNow());
         await ipc.activateTab(id);
       } else {
         await ipc.hideAllTabs();
       }
       setTabs((prev) => [
         ...prev,
-        {
-          id,
-          url: resolved,
-          title: hostnameFor(resolved),
-          hasWebview,
-        },
+        { id, url: resolved, title: hostnameFor(resolved), hasWebview },
       ]);
       setActiveId(id);
       setInput(hasWebview ? resolved : "");
       inputRef.current?.focus();
     },
-    [topBarHeight, startPage],
+    [startPage, rectNow],
   );
+
+  const openNewTabRef = useRef(openNewTab);
+  openNewTabRef.current = openNewTab;
+
+  /** Transient download status, bottom-right of the chrome. */
+  const [toast, setToast] = useState<{ text: string; ok: boolean } | null>(
+    null,
+  );
+  const toastTimerRef = useRef<number | null>(null);
+  const showToast = useCallback((text: string, ok: boolean, ms: number) => {
+    if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
+    setToast({ text, ok });
+    toastTimerRef.current = window.setTimeout(() => setToast(null), ms);
+  }, []);
+  const lastDownloadRef = useRef<string>("");
+
+  // Page-initiated openings and download progress. Registered once —
+  // see the ref-mirror note above for why these never re-register.
+  useEffect(() => {
+    const openPromise = listen<string>("open-url", (e) => {
+      openNewTabRef.current(e.payload).catch(() => {});
+    });
+    const startPromise = listen<{ name: string; url: string }>(
+      "download-started",
+      (e) => {
+        lastDownloadRef.current = e.payload.name;
+        showToast(`Downloading ${e.payload.name}…`, true, 60000);
+      },
+    );
+    const donePromise = listen<{ url: string; success: boolean }>(
+      "download-finished",
+      (e) => {
+        const name = lastDownloadRef.current || "file";
+        showToast(
+          e.payload.success
+            ? `${name} saved to Downloads`
+            : `${name} failed to download`,
+          e.payload.success,
+          4000,
+        );
+      },
+    );
+    return () => {
+      openPromise.then((off) => off());
+      startPromise.then((off) => off());
+      donePromise.then((off) => off());
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const activateTabById = useCallback(
     async (id: string) => {
       const tab = tabs.find((t) => t.id === id);
       if (!tab) return;
-      if (tab.hasWebview) {
-        await ipc.activateTab(id);
-      } else {
-        await ipc.hideAllTabs();
-      }
+      setSelection({ kind: "tab" });
+      if (tab.hasWebview) await ipc.activateTab(id);
+      else await ipc.hideAllTabs();
       setActiveId(id);
       setInput(tab.url !== BLANK_URL ? tab.url : "");
     },
@@ -359,29 +622,53 @@ function App() {
 
   const closeTabById = useCallback(
     async (id: string) => {
-      const tab = tabs.find((t) => t.id === id);
-      if (tab?.hasWebview) {
-        await ipc.closeTab(id);
-      }
-      const remaining = tabs.filter((t) => t.id !== id);
-      setTabs(remaining);
-      if (activeId === id) {
-        if (remaining.length > 0) {
-          const next = remaining[remaining.length - 1];
-          if (next.hasWebview) {
-            await ipc.activateTab(next.id);
-          } else {
-            await ipc.hideAllTabs();
-          }
-          setActiveId(next.id);
-          setInput(next.url !== BLANK_URL ? next.url : "");
+      // Decide from the CURRENT list inside the updater, not from a
+      // captured one. `ipc.closeTab` is a round trip, so two quick ⌘Ws
+      // would otherwise both read the pre-first-close list and the last
+      // write would resurrect a tab whose native webview is already
+      // gone — a row that renders nothing and whose URL bar silently
+      // fails. `decided` carries the choice back out for the IPC that
+      // has to follow the state change.
+      let decided: { next: Tab; wasActive: boolean } | null = null;
+
+      setTabs((prev) => {
+        const remaining = prev.filter((t) => t.id !== id);
+        const wasActive = activeIdRef.current === id;
+        if (remaining.length === 0) {
+          // Never fall to zero tabs: a blank tab stands in, so the shell
+          // always has something to show and somewhere to focus.
+          const fresh = blankTab();
+          decided = { next: fresh, wasActive: true };
+          return [fresh];
+        }
+        if (wasActive) {
+          const idx = prev.findIndex((t) => t.id === id);
+          // Prefer the neighbour to the right, as every other browser
+          // does — jumping to the end of a 20-tab list is disorienting.
+          const next = remaining[Math.min(idx, remaining.length - 1)];
+          decided = { next, wasActive: true };
+        }
+        return remaining;
+      });
+
+      const tab = tabsRef.current.find((t) => t.id === id);
+      if (tab?.hasWebview) await ipc.closeTab(id).catch(() => {});
+
+      if (decided) {
+        const { next } = decided as { next: Tab; wasActive: boolean };
+        setActiveId(next.id);
+        setInput(next.url !== BLANK_URL ? next.url : "");
+        // Don't yank a panel out from under the user just because a
+        // background tab closed.
+        if (selectionRef.current.kind !== "tab" || !next.hasWebview) {
+          await ipc.hideAllTabs().catch(() => {});
+          if (!next.hasWebview) inputRef.current?.focus();
         } else {
-          setActiveId(null);
-          setInput("");
+          await ipc.activateTab(next.id).catch(() => {});
         }
       }
     },
-    [tabs, activeId],
+    [],
   );
 
   const toggleBookmark = useCallback(async () => {
@@ -402,14 +689,6 @@ function App() {
 
   const [editingBookmark, setEditingBookmark] = useState<Bookmark | null>(null);
 
-  const openBookmarkMenu = useCallback(
-    (e: React.MouseEvent, id: number) => {
-      e.preventDefault();
-      ipc.showBookmarkMenu(id).catch(() => {});
-    },
-    [],
-  );
-
   const saveBookmarkEdit = useCallback(
     async (id: number, url: string, title: string) => {
       await ipc.updateBookmark(id, url, title);
@@ -420,14 +699,12 @@ function App() {
     [],
   );
 
-  // Native bookmark context-menu actions. The Rust side builds the OS
-  // menu, pops it up, and emits this event with the chosen action + id.
   useEffect(() => {
     const promise = listen<{ action: string; id: number }>(
       "bookmark-menu-action",
       (e) => {
         const { action, id } = e.payload;
-        const target = bookmarks.find((b) => b.id === id);
+        const target = bookmarksRef.current.find((b) => b.id === id);
         if (!target) return;
         switch (action) {
           case "open_new_tab":
@@ -448,131 +725,257 @@ function App() {
     return () => {
       promise.then((off) => off());
     };
-  }, [bookmarks, openNewTab, deleteBookmark]);
-
-  const toggleHistory = useCallback(() => {
-    setShowSettings(false);
-    setShowNetwork(false);
-    setShowHistory((v) => !v);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const toggleSettings = useCallback(() => {
-    setShowHistory(false);
-    setShowNetwork(false);
-    setShowSettings((v) => !v);
-  }, []);
+  /** Clicking a selected panel row again returns you to the page. */
+  const selectPanel = useCallback(
+    (kind: "history" | "network" | "settings") => {
+      setSelection((cur) => (cur.kind === kind ? { kind: "tab" } : { kind }));
+    },
+    [],
+  );
 
-  const toggleNetwork = useCallback(() => {
-    setShowSettings(false);
-    setShowHistory(false);
-    setShowNetwork((v) => !v);
-  }, []);
-
-  const closeHistory = useCallback(() => setShowHistory(false), []);
-  const closeSettings = useCallback(() => setShowSettings(false), []);
-  const closeNetwork = useCallback(() => setShowNetwork(false), []);
-
-  const closeAllOverlays = useCallback(() => {
-    setShowSettings(false);
-    setShowHistory(false);
-    setShowNetwork(false);
-    setShowAiDrawer(false);
-    setProfileMenuOpen(false);
-  }, []);
-
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      const meta = e.metaKey || e.ctrlKey;
-
-      // Panels and drawer have their own unmodified Esc behavior.
-      if (e.key === "Escape") {
-        if (
-          showSettings ||
-          showHistory ||
-          showNetwork ||
-          showAiDrawer ||
-          profileMenuOpen
-        ) {
-          e.preventDefault();
-          closeAllOverlays();
-          return;
-        }
+  /**
+   * A bookmark dropped onto the page: open it in a fresh tab and pair
+   * it to the right of the active page. With no live page to pair
+   * against, it just opens normally.
+   */
+  const openInSplit = useCallback(
+    async (url: string) => {
+      const act = tabsRef.current.find((t) => t.id === activeIdRef.current);
+      if (!act?.hasWebview) {
+        await navigateTo(url);
+        return;
       }
+      const id = uuid();
+      const paneB = splitRects(rectNow(), splitRatioRef.current)[1];
+      await ipc.openTab(id, url, paneB);
+      lastFramesRef.current.set(id, paneB);
+      setTabs((prev) => [
+        ...prev,
+        { id, url, title: hostnameFor(url), hasWebview: true },
+      ]);
+      setSelection({ kind: "tab" });
+      setSplitPair([act.id, id]);
+    },
+    [navigateTo, rectNow],
+  );
 
-      if (!meta) return;
-      switch (e.key) {
-        case "l":
-          e.preventDefault();
+  /**
+   * Enter or leave split view. Entering pairs the active tab with the
+   * next tab that has a page; the pair is left→right in that order.
+   */
+  const toggleSplit = useCallback(() => {
+    if (splitPairRef.current) {
+      setSplitPair(null);
+      return;
+    }
+    const act = tabsRef.current.find((t) => t.id === activeIdRef.current);
+    if (!act?.hasWebview) return;
+    const other = tabsRef.current.find((t) => t.id !== act.id && t.hasWebview);
+    if (!other) return;
+    setSelection({ kind: "tab" });
+    setSplitPair([act.id, other.id]);
+  }, []);
+  const toggleSplitRef = useRef(toggleSplit);
+  toggleSplitRef.current = toggleSplit;
+
+  /** Toolbar scissors: clip the current page immediately. */
+  const clipPage = useCallback(async () => {
+    if (!activeTab?.hasWebview) return;
+    try {
+      const id = await ipc.saveCurrentTab(activeTab.id);
+      // Show the result where it lives: the Notes card opens (or stays
+      // open) with the fresh note in front.
+      const clip = await ipc.getArtifact(id);
+      setOpenClip(clip);
+      setNotesMode((m) => m ?? "panel");
+    } catch {
+      // Surface failures where notes live too.
+      setNotesMode((m) => m ?? "panel");
+    }
+  }, [activeTab]);
+
+  // Every shortcut arrives as a native menu accelerator, so it works
+  // even while focus is inside a page — a `keydown` listener here does
+  // not, because the page is a separate native webview.
+  //
+  // The handler lives in a ref and the listener registers exactly once.
+  // Registering is an async IPC round trip while unregistering is
+  // synchronous, so an effect that re-ran on every state change would
+  // leave a gap on each page load with no handler attached — and
+  // keypresses in that gap are dropped silently.
+  const menuActionRef = useRef<(action: string) => void>(() => {});
+  menuActionRef.current = (action: string) => {
+    {
+      switch (action) {
+        case "new_tab":
+          openNewTab().catch(() => {});
+          break;
+        case "new_note": {
+          // ⌘N: a note next to whatever you're watching. The active
+          // page's URL rides along as the note's source.
+          const act = tabsRef.current.find(
+            (t) => t.id === activeIdRef.current,
+          );
+          ipc.focusShell().catch(() => {});
+          ipc
+            .createNote("", act?.hasWebview ? act.url : "")
+            .then((clip) => {
+              setOpenClip(clip);
+              setNotesMode((m) => m ?? "panel");
+            })
+            .catch(() => {});
+          break;
+        }
+        case "close_tab":
+          closeTabById(activeId).catch(() => {});
+          break;
+        case "open_location":
+          setSelection({ kind: "tab" });
           inputRef.current?.focus();
           inputRef.current?.select();
           break;
-        case "t":
-          e.preventDefault();
-          openNewTab();
+        case "reload":
+          if (hasActiveWebview) ipc.reload(activeId).catch(() => {});
           break;
-        case "w":
-          e.preventDefault();
-          if (activeId) closeTabById(activeId);
+        case "back":
+          if (hasActiveWebview) ipc.goBack(activeId).catch(() => {});
           break;
-        case "r":
-          e.preventDefault();
-          if (activeId) ipc.reload(activeId);
+        case "forward":
+          if (hasActiveWebview) ipc.goForward(activeId).catch(() => {});
           break;
-        case "d":
-          e.preventDefault();
-          toggleBookmark();
+        case "bookmark":
+          toggleBookmark().catch(() => {});
           break;
-        case "y":
-          e.preventDefault();
-          toggleHistory();
+        case "clip_page":
+          clipPage().catch(() => {});
           break;
-        case ",":
-          e.preventDefault();
-          toggleSettings();
-          break;
-        case "/":
-          e.preventDefault();
-          setShowAiDrawer((v) => !v);
-          break;
-        case "I":
-          if (e.shiftKey) {
-            e.preventDefault();
-            toggleNetwork();
+        case "clip_selection":
+          if (activeTab?.hasWebview) {
+            ipc
+              .clipSelection(activeTab.id)
+              .then(async (id) => {
+                const clip = await ipc.getArtifact(id);
+                setOpenClip(clip);
+                setNotesMode((m) => m ?? "panel");
+              })
+              .catch(() => setNotesMode((m) => m ?? "panel"));
           }
           break;
-        case "[":
-          e.preventDefault();
-          if (activeId) ipc.goBack(activeId);
+        case "clips":
+          // Take the first responder back from the page, or the shell's
+          // Escape handler cannot close what this just opened.
+          ipc.focusShell().catch(() => {});
+          toggleNotesRef.current();
           break;
-        case "]":
-          e.preventDefault();
-          if (activeId) ipc.goForward(activeId);
+        case "history":
+          selectPanel("history");
           break;
+        case "network":
+          selectPanel("network");
+          break;
+        case "settings":
+          selectPanel("settings");
+          break;
+        case "web_inspector":
+          if (activeTab?.hasWebview) {
+            ipc.openTabDevtools(activeTab.id).catch(() => {});
+          }
+          break;
+        case "zoom_in":
+        case "zoom_out":
+        case "zoom_reset": {
+          const id = activeIdRef.current;
+          const tab = tabsRef.current.find((t) => t.id === id);
+          if (!tab?.hasWebview) break;
+          const cur = zoomRef.current.get(id) ?? 1;
+          const next =
+            action === "zoom_reset"
+              ? 1
+              : Math.min(
+                  3,
+                  Math.max(0.5, cur + (action === "zoom_in" ? 0.1 : -0.1)),
+                );
+          zoomRef.current.set(id, next);
+          ipc.setTabZoom(id, next).catch(() => {});
+          break;
+        }
+        case "toggle_split":
+          toggleSplitRef.current();
+          break;
+        case "toggle_sidebar":
+          // A deliberate toggle owns the sidebar again: it must not
+          // close itself just because the pointer wanders off.
+          hoverRevealedRef.current = false;
+          setAutoCollapsed(false);
+          setSidebarOpen((v) => !v);
+          break;
+        case "next_tab":
+        case "prev_tab": {
+          const list = tabsRef.current;
+          if (list.length < 2) break;
+          const i = list.findIndex((t) => t.id === activeIdRef.current);
+          const delta = action === "next_tab" ? 1 : -1;
+          const next = list[(i + delta + list.length) % list.length];
+          activateTabById(next.id).catch(() => {});
+          break;
+        }
+      }
+    }
+  };
+
+  useEffect(() => {
+    const promise = listen<string>("menu-action", (e) =>
+      menuActionRef.current(e.payload),
+    );
+    return () => {
+      promise.then((off) => off());
+    };
+  }, []);
+
+  // Escape is not a menu accelerator: it means one thing, "put the
+  // page back", one layer at a time — Notes first, then a panel.
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      // Mid-sentence Esc means "stop typing", not "take my card away".
+      const el = document.activeElement as HTMLElement | null;
+      if (
+        notesMode !== null &&
+        el &&
+        (el.tagName === "TEXTAREA" || el.tagName === "INPUT") &&
+        el.closest('aside[aria-label="Notes"]')
+      ) {
+        e.preventDefault();
+        el.blur();
+        return;
+      }
+      if (notesMode !== null) {
+        e.preventDefault();
+        setNotesMode(null);
+        setOpenClip(null);
+        return;
+      }
+      if (panelOpen) {
+        e.preventDefault();
+        setSelection({ kind: "tab" });
       }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [
-    activeId,
-    openNewTab,
-    closeTabById,
-    toggleBookmark,
-    toggleHistory,
-    toggleSettings,
-    toggleNetwork,
-    showSettings,
-    showHistory,
-    showNetwork,
-    showAiDrawer,
-    profileMenuOpen,
-    closeAllOverlays,
-  ]);
+  }, [panelOpen, notesMode]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     const url = resolveQuery(input, searchEngine);
     if (!url) return;
-    await navigateTo(url);
+    try {
+      await navigateTo(url);
+    } catch {
+      return; // e.g. the backend refused a non-web URL scheme
+    }
     inputRef.current?.blur();
   }
 
@@ -580,350 +983,469 @@ function App() {
     <div
       data-tauri-drag-region
       onMouseDown={handleChromeMouseDown}
-      className="flex h-screen flex-col bg-background text-foreground"
+      className="flex h-screen bg-chrome text-foreground"
     >
-      {/* Row 1: tab strip */}
-      <div
-        data-tauri-drag-region
-        className="flex shrink-0 items-end gap-1 bg-muted/40"
-        style={{
-          height: TAB_STRIP_HEIGHT,
-          paddingLeft: TRAFFIC_LIGHT_INSET,
-          paddingRight: 8,
-        }}
-      >
+      {/* Hover-reveal: the PAGE_GUTTER leaves an 8px band of shell at
+          the window's left edge that still receives mouse events even
+          though everything beside it is a native webview. Parking the
+          pointer there opens the sidebar; it closes again when the
+          pointer leaves the sidebar for the page. Deliberate delay in,
+          so a cursor passing through the edge on its way to the page
+          does not flap the layout. */}
+      {!effectiveSidebarOpen && hoverReveal && (
         <div
-          data-tauri-drag-region
-          className="flex min-w-0 flex-1 items-end gap-1 overflow-x-auto"
-        >
-          {tabs.map((tab) => (
-            <TabPill
-              key={tab.id}
-              tab={tab}
-              active={tab.id === activeId}
-              canClose={tabs.length > 1 || tab.hasWebview}
-              onActivate={() => activateTabById(tab.id)}
-              onClose={() => closeTabById(tab.id)}
-            />
-          ))}
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label="New Tab"
-            onClick={() => openNewTab()}
-            data-tauri-drag-region="false"
-            className="mb-1 shrink-0"
-          >
-            <Plus strokeWidth={1.5} />
-          </Button>
-        </div>
-      </div>
-
-      {/* Row 2: toolbar */}
-      <div
-        data-tauri-drag-region
-        className="flex shrink-0 items-center gap-1 bg-muted/40 px-2"
-        style={{ height: NAV_BARS_HEIGHT - TAB_STRIP_HEIGHT }}
-      >
-        <Button
-          variant="ghost"
-          size="icon"
-          aria-label="Back"
-          disabled={!hasActiveWebview}
-          onClick={() => activeId && ipc.goBack(activeId)}
-        >
-          <ChevronLeft strokeWidth={1.5} />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          aria-label="Forward"
-          disabled={!hasActiveWebview}
-          onClick={() => activeId && ipc.goForward(activeId)}
-        >
-          <ChevronRight strokeWidth={1.5} />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          aria-label="Reload"
-          disabled={!hasActiveWebview}
-          onClick={() => activeId && ipc.reload(activeId)}
-        >
-          <RotateCw strokeWidth={1.5} />
-        </Button>
-
-        <form
-          onSubmit={handleSubmit}
-          data-tauri-drag-region="false"
-          className={cn(
-            "w-full",
-            hasActiveWebview ? "flex-1" : "mx-auto max-w-[480px]",
-          )}
-        >
-          <div className="group flex h-7 w-full items-center rounded-md border border-border bg-input focus-within:border-ring focus-within:bg-accent">
-            <button
-              type="button"
-              aria-label={activeBookmark ? "Remove bookmark" : "Add bookmark"}
-              disabled={!hasActiveWebview}
-              onClick={toggleBookmark}
-              className={cn(
-                "shrink-0 rounded-sm p-1 ml-1 transition-colors",
-                activeBookmark
-                  ? "text-foreground"
-                  : "text-muted-foreground hover:text-foreground",
-                !hasActiveWebview && "opacity-30",
-              )}
-              title={activeBookmark ? "Remove bookmark" : "Add bookmark"}
-            >
-              <Star
-                size={14}
-                strokeWidth={1.5}
-                fill={activeBookmark ? "currentColor" : "none"}
-              />
-            </button>
-            <input
-              ref={inputRef}
-              type="text"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onFocus={() => {
-                focusedRef.current = true;
-              }}
-              onBlur={() => {
-                focusedRef.current = false;
-              }}
-              placeholder="Search or enter URL"
-              spellCheck={false}
-              autoCapitalize="off"
-              autoCorrect="off"
-              className={cn(
-                "h-full w-full bg-transparent pl-1 pr-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none",
-                hasActiveWebview ? "text-left" : "text-center focus:text-left",
-              )}
-            />
-          </div>
-        </form>
-
-        <div className="flex shrink-0 items-center gap-1">
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label="Network"
-            title="Network · ⌘⇧I"
-            onClick={toggleNetwork}
-            className={cn(showNetwork && "bg-muted text-foreground")}
-          >
-            <Activity strokeWidth={1.5} />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label="History"
-            onClick={toggleHistory}
-            className={cn(showHistory && "bg-muted text-foreground")}
-          >
-            <HistoryIcon strokeWidth={1.5} />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label="Chat"
-            onClick={() => setShowAiDrawer((v) => !v)}
-            className={cn(showAiDrawer && "bg-muted text-foreground")}
-          >
-            <Sparkles strokeWidth={1.5} />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label="Settings"
-            onClick={toggleSettings}
-            className={cn(showSettings && "bg-muted text-foreground")}
-          >
-            <SettingsIcon strokeWidth={1.5} />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label="Profile"
-            data-profile-trigger
-            onClick={() => {
-              setShowSettings(false);
-              setShowHistory(false);
-              setProfileMenuOpen((v) => !v);
-            }}
-            className={cn(profileMenuOpen && "bg-muted text-foreground")}
-          >
-            <User strokeWidth={1.5} />
-          </Button>
-        </div>
-      </div>
-
-      {/* Row 3: bookmarks bar (only when there are bookmarks).
-          Shares the toolbar's bg so it reads as one continuous surface.
-          Gaps between items are window-drag surface; items opt out via
-          data-tauri-drag-region="false" on the sortable wrapper. */}
-      {showBookmarkBar && (
-        <div
-          data-tauri-drag-region
-          className="flex shrink-0 items-center gap-0.5 overflow-x-auto bg-muted/40 px-2 pb-1"
-          style={{ height: BOOKMARK_BAR_HEIGHT }}
-        >
-          <DndContext
-            sensors={dndSensors}
-            collisionDetection={closestCenter}
-            onDragStart={handleBookmarkDragStart}
-            onDragEnd={handleBookmarkDragEnd}
-            onDragCancel={handleBookmarkDragCancel}
-          >
-            <SortableContext
-              items={bookmarks.map((b) => b.id)}
-              strategy={horizontalListSortingStrategy}
-            >
-              {bookmarks.map((b) => (
-                <SortableBookmarkBarItem
-                  key={b.id}
-                  bookmark={b}
-                  onClick={() => navigateTo(b.url)}
-                  onContextMenu={(e) => openBookmarkMenu(e, b.id)}
-                />
-              ))}
-            </SortableContext>
-            <DragOverlay>
-              {draggingBookmark ? (
-                <div className="rounded shadow-md opacity-90">
-                  <BookmarkBarItem
-                    bookmark={draggingBookmark}
-                    onClick={() => {}}
-                  />
-                </div>
-              ) : null}
-            </DragOverlay>
-          </DndContext>
-        </div>
-      )}
-
-      {editingBookmark && (
-        <BookmarkEditPanel
-          bookmark={editingBookmark}
-          onSave={(url, title) => {
-            const { id } = editingBookmark;
-            setEditingBookmark(null);
-            saveBookmarkEdit(id, url, title).catch(() => {});
+          className="fixed inset-y-0 left-0 z-30"
+          style={{ width: PAGE_GUTTER }}
+          onMouseEnter={() => {
+            hoverTimerRef.current = window.setTimeout(() => {
+              hoverRevealedRef.current = true;
+              setAutoCollapsed(false);
+              setSidebarOpen(true);
+            }, 250);
           }}
-          onClose={() => setEditingBookmark(null)}
+          onMouseLeave={() => {
+            if (hoverTimerRef.current !== null) {
+              window.clearTimeout(hoverTimerRef.current);
+              hoverTimerRef.current = null;
+            }
+          }}
         />
       )}
+      {effectiveSidebarOpen && (
+        <div
+          className="flex h-full shrink-0"
+          onMouseEnter={() => {
+            if (hoverCloseTimerRef.current !== null) {
+              window.clearTimeout(hoverCloseTimerRef.current);
+              hoverCloseTimerRef.current = null;
+            }
+          }}
+          onMouseLeave={(e) => {
+            // Only a hover-revealed sidebar closes itself, and only
+            // when the pointer left for a native webview (relatedTarget
+            // is null then) — moving to the toolbar keeps it open.
+            if (!hoverRevealedRef.current || e.relatedTarget) return;
+            hoverCloseTimerRef.current = window.setTimeout(() => {
+              hoverRevealedRef.current = false;
+              setSidebarOpen(false);
+            }, 400);
+          }}
+        >
+        <Sidebar
+          width={sidebarWidth}
+          tabs={tabs}
+          activeTabId={activeId}
+          loadingTabs={loadingTabs}
+          bookmarks={bookmarks}
+          selection={selection}
+          iconFor={iconFor}
+          onToggleSidebar={() => setSidebarOpen(false)}
+          onSelectTab={(id) => activateTabById(id)}
+          onCloseTab={(id) => closeTabById(id)}
+          onNewTab={() => openNewTab()}
+          onTabContextMenu={(e) => e.preventDefault()}
+          onOpenBookmark={(url) => {
+            navigateTo(url).catch(() => {});
+          }}
+          onOpenBookmarkInNewTab={(url) => {
+            openNewTab(url).catch(() => {});
+          }}
+          onBookmarkContextMenu={(e, id) => {
+            e.preventDefault();
+            ipc.showBookmarkMenu(id).catch(() => {});
+          }}
+          onReorderBookmarks={(ids) => {
+            setBookmarks((prev) => {
+              const byId = new Map(prev.map((b) => [b.id, b]));
+              const next = ids
+                .map((id) => byId.get(id))
+                .filter((b): b is Bookmark => !!b);
+              ipc.reorderBookmarks(ids).catch(() => {
+                ipc.listBookmarks().then(setBookmarks).catch(() => {});
+              });
+              return next;
+            });
+          }}
+          onSelectPanel={selectPanel}
+          onDropTabToSplit={(tabId) => {
+            const act = tabsRef.current.find(
+              (t) => t.id === activeIdRef.current,
+            );
+            const dropped = tabsRef.current.find((t) => t.id === tabId);
+            if (!dropped?.hasWebview) return;
+            if (!act?.hasWebview || act.id === dropped.id) {
+              activateTabById(tabId).catch(() => {});
+              return;
+            }
+            setSelection({ kind: "tab" });
+            setSplitPair([act.id, dropped.id]);
+          }}
+          onDropBookmarkToSplit={(url) => {
+            openInSplit(url).catch(() => {});
+          }}
+          onSplitDragOver={setSplitDropHint}
+          onPinTab={(tabId, folderId) => {
+            const t = tabsRef.current.find((x) => x.id === tabId);
+            if (!t?.hasWebview) return;
+            if (bookmarksRef.current.some((b) => b.url === t.url)) return;
+            (async () => {
+              const b = await ipc.addBookmark(t.url, t.title);
+              if (folderId !== null) await ipc.moveBookmark(b.id, folderId);
+              setBookmarks(await ipc.listBookmarks());
+            })().catch(() => {});
+          }}
+          onGroupBookmarks={(targetId, draggedId) => {
+            (async () => {
+              await ipc.groupBookmarks(targetId, draggedId);
+              setBookmarks(await ipc.listBookmarks());
+            })().catch(() => {});
+          }}
+          onMoveBookmark={(id, folderId) => {
+            (async () => {
+              await ipc.moveBookmark(id, folderId);
+              setBookmarks(await ipc.listBookmarks());
+            })().catch(() => {});
+          }}
+        />
+        </div>
+      )}
 
-      {/* Thin progress strip. Always reserved so starting a load doesn't
-          re-lay out the native webview. Hidden via opacity when idle. */}
-      <div
-        data-tauri-drag-region
-        className="relative shrink-0 bg-muted/40"
-        style={{ height: PROGRESS_BAR_HEIGHT }}
-      >
-        <TopProgress active={activeLoading} />
-      </div>
+      {/* Content column: toolbar, progress, then the page (native) or a
+          React surface occupying the same box. */}
+      <div className="flex min-w-0 flex-1 flex-col">
+        <div
+          data-tauri-drag-region
+          className="flex shrink-0 items-center gap-1 pr-2"
+          style={{
+            height: TOOLBAR_HEIGHT,
+            paddingLeft: effectiveSidebarOpen ? 8 : TRAFFIC_LIGHT_INSET,
+          }}
+        >
+          {!effectiveSidebarOpen && (
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label="Show sidebar"
+              title="Show sidebar · ⌃⌘S"
+              onClick={() => {
+                hoverRevealedRef.current = false;
+                setSidebarOpen(true);
+                setAutoCollapsed(false);
+              }}
+            >
+              <PanelLeft strokeWidth={1.5} />
+            </Button>
+          )}
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="Back"
+            disabled={!hasActiveWebview}
+            onClick={() => ipc.goBack(activeId)}
+          >
+            <ChevronLeft strokeWidth={1.5} />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="Forward"
+            disabled={!hasActiveWebview}
+            onClick={() => ipc.goForward(activeId)}
+          >
+            <ChevronRight strokeWidth={1.5} />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="Reload"
+            disabled={!hasActiveWebview}
+            onClick={() => ipc.reload(activeId)}
+          >
+            <RotateCw strokeWidth={1.5} />
+          </Button>
 
-      {/* Below the top bars: content area + AI drawer side-by-side.
-          Content webview is positioned here by Tauri; React just manages
-          landing/panels/drawer on top. */}
-      <div
-        data-tauri-drag-region="false"
-        className="relative flex flex-1 min-h-0"
-      >
-        <div className="relative flex-1">
-          {showLanding && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center gap-8 px-8">
-              <div className="flex items-center gap-1.5 text-foreground">
-                <span className="text-3xl font-extralight tracking-tight">
-                  Null
-                </span>
-                <NullMark />
-              </div>
-              <div className="flex flex-col items-center gap-1 text-sm text-muted-foreground">
-                <div>Type a URL and press enter.</div>
-                <div className="text-xs text-subtle">
-                  ⌘T new tab · ⌘W close · ⌘L focus · ⌘D bookmark · ⌘, settings
+          <form
+            onSubmit={handleSubmit}
+            data-tauri-drag-region="false"
+            className="w-full flex-1"
+          >
+            {/* The pill steps off the chrome ground the way tiles do —
+                accent, not muted, because muted IS the ground now. */}
+            <div className="group flex h-[26px] w-full items-center rounded-md border border-transparent bg-accent/50 transition-colors focus-within:border-[color-mix(in_srgb,var(--select)_50%,transparent)] focus-within:bg-accent">
+              <button
+                type="button"
+                aria-label={activeBookmark ? "Remove bookmark" : "Add bookmark"}
+                disabled={!hasActiveWebview}
+                onClick={toggleBookmark}
+                className={cn(
+                  "ml-1 shrink-0 rounded-sm p-1 transition-colors",
+                  activeBookmark
+                    ? "text-select"
+                    : "text-muted-foreground hover:text-foreground",
+                  !hasActiveWebview && "opacity-30",
+                )}
+                title={activeBookmark ? "Remove bookmark" : "Add bookmark"}
+              >
+                <Star
+                  size={14}
+                  strokeWidth={1.5}
+                  fill={activeBookmark ? "currentColor" : "none"}
+                />
+              </button>
+              <input
+                ref={inputRef}
+                type="text"
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onFocus={() => {
+                  focusedRef.current = true;
+                }}
+                onBlur={() => {
+                  focusedRef.current = false;
+                }}
+                placeholder="Search or enter URL"
+                spellCheck={false}
+                autoCapitalize="off"
+                autoCorrect="off"
+                className="h-full w-full bg-transparent pl-1 pr-2 font-mono text-[12px] text-foreground placeholder:text-muted-foreground focus:outline-none"
+              />
+            </div>
+          </form>
+
+          <div className="flex shrink-0 items-center gap-0.5">
+            {/* Download status. It lives in the toolbar because the
+                toolbar is the one strip that is always chrome — a
+                floating toast would vanish under the native page. */}
+            {toast && (
+              <span
+                role="status"
+                className={cn(
+                  "max-w-56 shrink truncate rounded-md bg-muted px-2 py-1 text-[11px]",
+                  toast.ok ? "text-muted-foreground" : "text-danger",
+                )}
+                title={toast.text}
+              >
+                {toast.text}
+              </span>
+            )}
+            {/* Notes lives here, not in the sidebar: the card drops in
+                right under this button. Capturing is inside the card
+                (and stays on ⇧⌘C). */}
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label="Notes"
+              title="Notes · ⌘/"
+              onClick={toggleNotes}
+              className={cn(notesMode && "text-select")}
+            >
+              <NotebookText strokeWidth={1.5} />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label={splitPair ? "Leave split view" : "Split with next tab"}
+              title={
+                splitPair ? "Leave split view · ⌥⌘S" : "Split with next tab · ⌥⌘S"
+              }
+              disabled={
+                !splitPair && tabs.filter((t) => t.hasWebview).length < 2
+              }
+              onClick={toggleSplit}
+              className={cn(splitPair && "text-select")}
+            >
+              <Columns2 strokeWidth={1.5} />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label="New tab"
+              title="New tab · ⌘T"
+              onClick={() => openNewTab()}
+            >
+              <Plus strokeWidth={1.5} />
+            </Button>
+          </div>
+        </div>
+
+        {/* Progress strip + the top gutter. There used to be a hairline
+            under this row; the gutter replaced it. Keeping the two in
+            one box is what keeps the React panels below and the native
+            webview at the same y — this row's height IS the difference
+            between TOOLBAR_HEIGHT and TOP_INSET. */}
+        <div
+          data-tauri-drag-region
+          className="relative shrink-0"
+          style={{ height: PROGRESS_HEIGHT + PAGE_GUTTER }}
+        >
+          <TopProgress active={activeLoading} />
+        </div>
+
+        <div data-tauri-drag-region="false" className="relative flex min-h-0 flex-1">
+          <div className="relative min-w-0 flex-1">
+            {showHome && (
+              <Home
+                onOpenClip={(clip) => {
+                  setOpenClip(clip);
+                  setNotesMode((m) => m ?? "panel");
+                }}
+                onOpenUrl={(url) => {
+                  navigateTo(url).catch(() => {});
+                }}
+              />
+            )}
+            {/* Drop-target preview during a sidebar drag: the vacated
+                right half, outlined. pointer-events-none — the drop is
+                positional, resolved by the drag's own end handler. */}
+            {splitDropHint && !splitPair && selection.kind === "tab" && (
+              <div
+                aria-hidden="true"
+                className="pointer-events-none absolute z-40"
+                style={(() => {
+                  const [, pb] = splitRects(rectNow());
+                  const off = effectiveSidebarOpen ? sidebarWidth : 0;
+                  return {
+                    left: pb.left - off,
+                    width: pb.width,
+                    top: 0,
+                    bottom: PAGE_GUTTER,
+                  };
+                })()}
+              >
+                <div className="flex h-full w-full items-center justify-center rounded-xl bg-card ring-1 ring-select">
+                  <span className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+                    Drop to split
+                  </span>
                 </div>
               </div>
+            )}
+            {/* Split divider: the gutter between the panes is shell
+                surface, so it can be a real drag handle. During the
+                drag AppKit keeps routing pointer events to the view
+                that took the pointer-down, even across the native
+                panes. */}
+            {splitPair && selection.kind === "tab" && (
+              <div
+                role="separator"
+                aria-orientation="vertical"
+                className="absolute inset-y-0 z-30 cursor-col-resize"
+                style={{
+                  left:
+                    PAGE_GUTTER +
+                    splitRects(rectNow(), splitRatio)[0].width,
+                  width: PAGE_GUTTER,
+                }}
+                onPointerDown={(e) => {
+                  e.preventDefault();
+                  dividerDraggingRef.current = true;
+                  const rect = rectNow();
+                  const paneSpace = rect.width - PAGE_GUTTER;
+                  let raf = 0;
+                  const move = (ev: PointerEvent) => {
+                    const r = (ev.clientX - rect.left) / paneSpace;
+                    splitRatioRef.current = Math.min(0.75, Math.max(0.25, r));
+                    if (!raf) {
+                      raf = requestAnimationFrame(() => {
+                        raf = 0;
+                        setSplitRatio(splitRatioRef.current);
+                      });
+                    }
+                  };
+                  const up = () => {
+                    window.removeEventListener("pointermove", move);
+                    window.removeEventListener("pointerup", up);
+                    if (raf) cancelAnimationFrame(raf);
+                    dividerDraggingRef.current = false;
+                    setSplitRatio(splitRatioRef.current);
+                  };
+                  window.addEventListener("pointermove", move);
+                  window.addEventListener("pointerup", up);
+                }}
+              >
+                {/* Swap the panes. Lives on the divider because the
+                    divider is the one strip of shell between two native
+                    pages — the only place a control can exist there. */}
+                <button
+                  type="button"
+                  aria-label="Swap panes"
+                  title="Swap panes"
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={() =>
+                    setSplitPair((p) => (p ? [p[1], p[0]] : p))
+                  }
+                  className="absolute left-1/2 top-1/2 flex h-6 w-6 -translate-x-1/2 -translate-y-1/2 cursor-pointer items-center justify-center rounded-full bg-card text-muted-foreground ring-1 ring-border transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-ring"
+                >
+                  <ArrowLeftRight size={11} strokeWidth={1.5} />
+                </button>
+              </div>
+            )}
+            {selection.kind === "settings" && (
+              <SettingsPanel
+                onClose={() => setSelection({ kind: "tab" })}
+                onOpenUrl={(url) => {
+                  setSelection({ kind: "tab" });
+                  openNewTab(url).catch(() => {});
+                }}
+              />
+            )}
+            {selection.kind === "history" && (
+              <HistoryPanel
+                onClose={() => setSelection({ kind: "tab" })}
+                onOpenUrl={(url) => {
+                  setSelection({ kind: "tab" });
+                  navigateTo(url).catch(() => {});
+                }}
+              />
+            )}
+            {selection.kind === "network" && (
+              <NetworkInspector onClose={() => setSelection({ kind: "tab" })} />
+            )}
+            {editingBookmark && (
+              <BookmarkEditPanel
+                bookmark={editingBookmark}
+                onSave={(url, title) => {
+                  const { id } = editingBookmark;
+                  setEditingBookmark(null);
+                  saveBookmarkEdit(id, url, title).catch(() => {});
+                }}
+                onClose={() => setEditingBookmark(null)}
+              />
+            )}
+          </div>
+
+          {/* Notes host: the page yields this width (contentRect
+              subtracts it), and the card floats inside it with the
+              standard gutter on its far side. */}
+          {notesMode !== null && (
+            <div
+              className="shrink-0 pb-2 pr-2 motion-safe:transition-[width] motion-safe:duration-200 motion-safe:ease-out"
+              style={{ width: notesWidth }}
+            >
+              <NotesPanel
+                mode={notesMode}
+                onSetMode={setNotesMode}
+                onClose={() => {
+                  setNotesMode(null);
+                  setOpenClip(null);
+                }}
+                activeTab={
+                  activeTab && activeTab.hasWebview
+                    ? {
+                        id: activeTab.id,
+                        url: activeTab.url,
+                        title: activeTab.title,
+                      }
+                    : null
+                }
+                initialClip={openClip}
+                onOpenUrl={(url) => {
+                  openNewTab(url).catch(() => {});
+                }}
+              />
             </div>
           )}
-          {showSettings && <SettingsPanel onClose={closeSettings} />}
-          {showHistory && (
-            <HistoryPanel
-              onClose={closeHistory}
-              onOpenUrl={(url) => {
-                setShowHistory(false);
-                navigateTo(url);
-              }}
-            />
-          )}
-          {showNetwork && <NetworkInspector onClose={closeNetwork} />}
-          {profileMenuOpen && (
-            <ProfileMenu
-              onClose={() => setProfileMenuOpen(false)}
-              onOpenSettings={() => {
-                setProfileMenuOpen(false);
-                setShowSettings(true);
-              }}
-            />
-          )}
         </div>
-        {showAiDrawer && (
-          <AIDrawer
-            onClose={() => setShowAiDrawer(false)}
-            activeTab={
-              activeTab && activeTab.hasWebview
-                ? { id: activeTab.id, url: activeTab.url, title: activeTab.title }
-                : null
-            }
-          />
-        )}
       </div>
-    </div>
-  );
-}
-
-function TabPill({
-  tab,
-  active,
-  canClose,
-  onActivate,
-  onClose,
-}: {
-  tab: Tab;
-  active: boolean;
-  canClose: boolean;
-  onActivate: () => void;
-  onClose: () => void;
-}) {
-  return (
-    <div
-      onClick={onActivate}
-      data-tauri-drag-region="false"
-      className={cn(
-        "group relative flex h-7 min-w-0 max-w-[200px] flex-1 cursor-default items-center gap-2 rounded-md px-3 text-xs transition-colors",
-        active
-          ? "bg-background text-foreground"
-          : "text-muted-foreground hover:bg-background/50 hover:text-foreground",
-      )}
-    >
-      <span className="min-w-0 flex-1 truncate">{tab.title}</span>
-      {canClose && (
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            onClose();
-          }}
-          aria-label="Close tab"
-          className="shrink-0 rounded p-0.5 text-muted-foreground opacity-0 hover:bg-accent hover:text-foreground group-hover:opacity-100"
-        >
-          <X size={10} strokeWidth={1.5} />
-        </button>
-      )}
     </div>
   );
 }
@@ -975,13 +1497,13 @@ function BookmarkEditPanel({
       ref={panelRef}
       role="dialog"
       data-tauri-drag-region="false"
-      className="fixed left-1/2 top-20 z-50 w-[360px] -translate-x-1/2 rounded-lg border border-border bg-background p-3 text-[13px] text-foreground shadow-lg"
+      className="absolute left-1/2 top-8 z-50 w-[360px] -translate-x-1/2 rounded-xl border border-border bg-background p-4 text-[13px] text-foreground"
     >
-      <div className="mb-2 text-xs font-medium text-muted-foreground">
+      <div className="mb-3 font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
         Edit bookmark
       </div>
       <label className="mb-2 block">
-        <span className="mb-1 block text-[11px] uppercase tracking-wide text-muted-foreground">
+        <span className="mb-1 block font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
           Name
         </span>
         <input
@@ -992,11 +1514,11 @@ function BookmarkEditPanel({
           onKeyDown={(e) => {
             if (e.key === "Enter") save();
           }}
-          className="w-full rounded border border-border bg-muted/40 px-2 py-1 text-foreground outline-none focus:border-foreground/40"
+          className="w-full rounded-md border border-border bg-muted/40 px-2 py-1 text-foreground outline-none focus:border-ring"
         />
       </label>
       <label className="mb-3 block">
-        <span className="mb-1 block text-[11px] uppercase tracking-wide text-muted-foreground">
+        <span className="mb-1 block font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
           URL
         </span>
         <input
@@ -1006,112 +1528,26 @@ function BookmarkEditPanel({
           onKeyDown={(e) => {
             if (e.key === "Enter") save();
           }}
-          className="w-full rounded border border-border bg-muted/40 px-2 py-1 text-foreground outline-none focus:border-foreground/40"
+          className="w-full rounded-md border border-border bg-muted/40 px-2 py-1 text-foreground outline-none focus:border-ring"
         />
       </label>
       <div className="flex justify-end gap-2">
         <button
           type="button"
           onClick={onClose}
-          className="rounded px-2 py-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+          className="rounded-md px-2 py-1 text-muted-foreground hover:bg-muted hover:text-foreground"
         >
           Cancel
         </button>
         <button
           type="button"
           onClick={save}
-          className="rounded bg-foreground px-2 py-1 text-background hover:opacity-90"
+          className="rounded-md bg-primary px-2 py-1 text-primary-foreground hover:bg-primary/90"
         >
           Save
         </button>
       </div>
     </div>
-  );
-}
-
-function BookmarkBarItem({
-  bookmark,
-  onClick,
-  onContextMenu,
-}: {
-  bookmark: Bookmark;
-  onClick: () => void;
-  onContextMenu?: (e: React.MouseEvent) => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      onContextMenu={onContextMenu}
-      title={bookmark.url}
-      className="flex h-6 max-w-[180px] shrink-0 items-center rounded px-2 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-    >
-      <span className="truncate">{bookmark.title}</span>
-    </button>
-  );
-}
-
-function SortableBookmarkBarItem({
-  bookmark,
-  onClick,
-  onContextMenu,
-}: {
-  bookmark: Bookmark;
-  onClick: () => void;
-  onContextMenu?: (e: React.MouseEvent) => void;
-}) {
-  const {
-    attributes,
-    listeners,
-    setNodeRef,
-    transform,
-    transition,
-    isDragging,
-  } = useSortable({ id: bookmark.id });
-
-  const style = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-    opacity: isDragging ? 0.4 : 1,
-  };
-
-  return (
-    <div
-      ref={setNodeRef}
-      style={style}
-      data-tauri-drag-region="false"
-      {...attributes}
-      {...listeners}
-    >
-      <BookmarkBarItem
-        bookmark={bookmark}
-        onClick={onClick}
-        onContextMenu={onContextMenu}
-      />
-    </div>
-  );
-}
-
-function NullMark() {
-  return (
-    <svg
-      width="28"
-      height="28"
-      viewBox="0 0 32 32"
-      fill="none"
-      aria-hidden="true"
-    >
-      <circle cx="16" cy="16" r="11" stroke="currentColor" strokeWidth="1.25" />
-      <line
-        x1="6"
-        y1="26"
-        x2="26"
-        y2="6"
-        stroke="currentColor"
-        strokeWidth="1.25"
-        strokeLinecap="round"
-      />
-    </svg>
   );
 }
 

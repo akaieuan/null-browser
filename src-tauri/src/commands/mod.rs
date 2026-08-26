@@ -3,10 +3,9 @@
 //! Every command that the frontend can invoke lives under this module.
 //! One file per domain so the full IPC surface is auditable at a glance.
 
-pub mod ai;
 pub mod artifacts;
 pub mod bookmarks;
-pub mod chats;
+pub mod favicons;
 pub mod history;
 pub mod meta;
 pub mod network;

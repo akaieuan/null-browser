@@ -4,6 +4,7 @@
 
 import { searchUrlFor, type SearchEngineId } from "@/lib/preferences";
 
+const WEB_PROTOCOL = /^https?:\/\//i;
 const HAS_PROTOCOL = /^[a-z][a-z0-9+\-.]*:\/\//i;
 const LOOKS_LIKE_DOMAIN = /^[^\s]+\.[a-z]{2,}([\/?#]|$)/i;
 
@@ -13,7 +14,13 @@ export function resolveQuery(
 ): string | null {
   const trimmed = q.trim();
   if (!trimmed) return null;
-  if (HAS_PROTOCOL.test(trimmed)) return trimmed;
+  if (WEB_PROTOCOL.test(trimmed)) return trimmed;
+  // Tabs only load http(s) — the Rust side refuses everything else.
+  // A non-web scheme (file:, ftp:, …) becomes a search instead of a
+  // silent dead-end.
+  if (HAS_PROTOCOL.test(trimmed)) {
+    return searchUrlFor(searchEngine, trimmed);
+  }
   if (LOOKS_LIKE_DOMAIN.test(trimmed) && !trimmed.includes(" ")) {
     return `https://${trimmed}`;
   }

@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { Trash2, X } from "lucide-react";
 
-import { PanelHeader } from "@/components/panels/PanelHeader";
+import { EmptyState } from "@/components/panels/EmptyState";
+import { Panel } from "@/components/panels/Panel";
+import { Kicker, ListRow } from "@/components/ui/atoms";
 import { ipc, type HistoryEntry } from "@/lib/ipc";
 
 export function HistoryPanel({
@@ -40,57 +42,48 @@ export function HistoryPanel({
   const grouped = groupByDay(entries);
 
   return (
-    <div
-      className="absolute inset-0 z-40 flex flex-col overflow-hidden bg-background text-foreground"
-      style={{ contain: "layout paint style" }}
-    >
-      <PanelHeader title="History" onClose={onClose} />
-
-      <main className="flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-2xl px-8 py-8">
-          {loading ? (
-            <HistorySkeleton />
-          ) : entries.length === 0 ? (
-            <EmptyState />
-          ) : (
-            <>
-              <div className="mb-6 flex items-center justify-between">
-                <div className="text-xs text-muted-foreground">
-                  {entries.length} {entries.length === 1 ? "visit" : "visits"}
+    <Panel title="History" onClose={onClose}>
+      {loading ? (
+        <HistorySkeleton />
+      ) : entries.length === 0 ? (
+        <HistoryEmpty />
+      ) : (
+        <>
+          <div className="flex h-8 items-center justify-between">
+            <div className="text-xs text-muted-foreground">
+              {entries.length} {entries.length === 1 ? "visit" : "visits"}
+            </div>
+            <button
+              type="button"
+              onClick={handleClearAll}
+              className="-mr-2 flex items-center gap-1.5 rounded-sm px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            >
+              <Trash2 size={12} strokeWidth={1.5} />
+              Clear all
+            </button>
+          </div>
+          <div className="mt-4 flex flex-col gap-8">
+            {grouped.map(([label, rows]) => (
+              <section key={label}>
+                <Kicker as="h3" className="mb-2 text-subtle">
+                  {label}
+                </Kicker>
+                <div className="flex flex-col gap-0.5">
+                  {rows.map((e) => (
+                    <HistoryRow
+                      key={e.id}
+                      entry={e}
+                      onOpen={() => onOpenUrl(e.url)}
+                      onRemove={() => handleRemove(e.id)}
+                    />
+                  ))}
                 </div>
-                <button
-                  type="button"
-                  onClick={handleClearAll}
-                  className="flex items-center gap-1.5 rounded px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
-                >
-                  <Trash2 size={12} strokeWidth={1.5} />
-                  Clear all
-                </button>
-              </div>
-              <div className="flex flex-col gap-8">
-                {grouped.map(([label, rows]) => (
-                  <section key={label}>
-                    <h3 className="mb-2 text-xs font-medium text-subtle">
-                      {label}
-                    </h3>
-                    <div className="border-t border-border">
-                      {rows.map((e) => (
-                        <HistoryRow
-                          key={e.id}
-                          entry={e}
-                          onOpen={() => onOpenUrl(e.url)}
-                          onRemove={() => handleRemove(e.id)}
-                        />
-                      ))}
-                    </div>
-                  </section>
-                ))}
-              </div>
-            </>
-          )}
-        </div>
-      </main>
-    </div>
+              </section>
+            ))}
+          </div>
+        </>
+      )}
+    </Panel>
   );
 }
 
@@ -105,32 +98,33 @@ function HistoryRow({
 }) {
   const time = formatTime(entry.visited_at);
   return (
-    <div
-      className="group flex items-center gap-3 border-b border-border py-2 last:border-b-0"
-      style={{ contentVisibility: "auto", containIntrinsicSize: "auto 52px" }}
+    <ListRow
+      style={{ contentVisibility: "auto", containIntrinsicSize: "auto 56px" }}
     >
       <button
         type="button"
         onClick={onOpen}
-        className="flex min-w-0 flex-1 flex-col items-start gap-0.5 text-left"
+        className="flex min-w-0 flex-1 flex-col items-start gap-0.5 rounded-sm text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
       >
-        <span className="truncate text-sm text-foreground group-hover:underline underline-offset-2">
+        <span className="w-full truncate text-sm text-foreground underline-offset-2 group-hover:underline">
           {entry.title || entry.url}
         </span>
-        <span className="truncate text-xs text-muted-foreground">
+        <span className="w-full truncate text-xs text-muted-foreground">
           {entry.url}
         </span>
       </button>
-      <span className="shrink-0 text-xs tabular-nums text-subtle">{time}</span>
+      <span className="mt-0.5 shrink-0 text-xs tabular-nums text-subtle">
+        {time}
+      </span>
       <button
         type="button"
         aria-label="Remove"
         onClick={onRemove}
-        className="shrink-0 rounded p-1 text-muted-foreground opacity-0 hover:bg-muted hover:text-foreground group-hover:opacity-100"
+        className="shrink-0 rounded-sm p-1 text-muted-foreground opacity-0 hover:bg-accent hover:text-foreground focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring group-hover:opacity-100"
       >
         <X size={12} strokeWidth={1.5} />
       </button>
-    </div>
+    </ListRow>
   );
 }
 
@@ -139,17 +133,14 @@ function HistorySkeleton() {
   // Rows match HistoryRow's height so the layout doesn't jump.
   return (
     <div aria-hidden="true">
-      <div className="mb-6 flex items-center justify-between">
+      <div className="flex h-8 items-center justify-between">
         <div className="h-3 w-16 rounded bg-muted" />
         <div className="h-3 w-16 rounded bg-muted" />
       </div>
-      <div className="mb-2 h-3 w-20 rounded bg-muted" />
-      <div className="border-t border-border">
+      <div className="mb-2 mt-4 h-3 w-20 rounded bg-muted" />
+      <div className="flex flex-col gap-0.5">
         {Array.from({ length: 8 }).map((_, i) => (
-          <div
-            key={i}
-            className="flex items-center gap-3 border-b border-border py-2"
-          >
+          <div key={i} className="flex items-center gap-3 py-2.5">
             <div className="flex min-w-0 flex-1 flex-col gap-1">
               <div className="h-3 w-3/5 rounded bg-muted" />
               <div className="h-2.5 w-4/5 rounded bg-muted/60" />
@@ -162,15 +153,11 @@ function HistorySkeleton() {
   );
 }
 
-function EmptyState() {
+function HistoryEmpty() {
   return (
-    <div className="flex h-64 flex-col items-center justify-center gap-2 text-center">
-      <div className="text-sm text-foreground">No history yet</div>
-      <div className="max-w-sm text-xs text-muted-foreground">
-        Pages you visit will appear here. Local only — never synced, never
-        uploaded.
-      </div>
-    </div>
+    <EmptyState title="No history yet">
+      Pages you visit appear here. Local only — never synced, never uploaded.
+    </EmptyState>
   );
 }
 
