@@ -28,6 +28,7 @@ Stack: Tauri 2.0 + Vite + React + TypeScript. Bundle identifier `sh.null.browser
 | Dev signing setup (macOS, one-time) | `npm run dev:setup` |
 | Dev (launches desktop window) | `npm run tauri dev` |
 | Build release bundles | `npm run tauri build` |
+| Build + install to /Applications | `npm run app:install` (removes the target/ bundle copy so Spotlight sees one Null.app) |
 | Rust type-check only | `cargo check --manifest-path src-tauri/Cargo.toml` |
 | Rust lint (clippy) | `cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings` |
 | Frontend build | `npm run build` |

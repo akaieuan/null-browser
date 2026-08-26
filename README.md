@@ -237,7 +237,13 @@ On macOS, `npm run dev:setup` is a one-time step that creates a self-signed `nul
 npm run tauri build
 ```
 
-Produces a `.app` bundle in `src-tauri/target/release/bundle/macos/`.
+Produces a `.app` bundle in `src-tauri/target/release/bundle/macos/`. To install it, use
+
+```sh
+npm run app:install
+```
+
+which builds, copies the bundle to `/Applications`, deletes the copy in `target/`, and launches. Deleting the build copy matters: Spotlight indexes `.app` bundles wherever they sit, so leaving one in `target/` puts two Nulls in Launchpad.
 
 ### Where your data lives
 

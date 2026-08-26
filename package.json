@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "dev:setup": "./scripts/setup-dev-signing.sh",
+    "app:install": "./scripts/install-app.sh",
     "ui:shoot": "node scripts/ui/shoot.mjs",
     "ui:tokens": "node scripts/ui/tokens.mjs"
   },
