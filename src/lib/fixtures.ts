@@ -97,8 +97,19 @@ function wantsEmpty(): boolean {
   }
 }
 
-/** Commands with no useful fixture resolve to a sane empty value. */
-export function fixtureFor(cmd: string): unknown {
+let nextFixtureId = 100;
+
+/**
+ * Commands with no useful fixture resolve to a sane empty value.
+ *
+ * The bookmark mutations (`move_bookmark`, `group_bookmarks`,
+ * `reorder_bookmarks`) are live: they mutate `BOOKMARKS` the way
+ * storage would, including dissolving an emptied folder. Without this,
+ * every drag in the dev preview silently reverts on the refresh that
+ * follows — which makes drag-and-drop the one interaction the harness
+ * could never exercise.
+ */
+export function fixtureFor(cmd: string, args?: Record<string, unknown>): unknown {
   if (wantsEmpty()) {
     switch (cmd) {
       case "list_bookmarks":
@@ -112,7 +123,54 @@ export function fixtureFor(cmd: string): unknown {
     }
   }
   switch (cmd) {
-    case "list_bookmarks": return BOOKMARKS;
+    // A fresh array each call: the mutations below edit BOOKMARKS in
+    // place, and handing React the same reference back would make
+    // setState bail on identity and swallow the update.
+    case "list_bookmarks": return [...BOOKMARKS];
+    case "move_bookmark": {
+      const b = BOOKMARKS.find(
+        (x) => x.id === args?.id && x.kind === "bookmark",
+      );
+      if (b) b.parent_id = (args?.parent as number | null) ?? null;
+      for (let i = BOOKMARKS.length - 1; i >= 0; i--) {
+        const f = BOOKMARKS[i];
+        if (
+          f.kind === "folder" &&
+          !BOOKMARKS.some((c) => c.parent_id === f.id)
+        ) {
+          BOOKMARKS.splice(i, 1);
+        }
+      }
+      return null;
+    }
+    case "group_bookmarks": {
+      const folder = {
+        id: nextFixtureId++, url: "", title: "Folder",
+        created_at: now, kind: "folder", parent_id: null as number | null,
+      };
+      const at = BOOKMARKS.findIndex((x) => x.id === args?.target);
+      BOOKMARKS.splice(at < 0 ? BOOKMARKS.length : at, 0, folder);
+      for (const x of BOOKMARKS) {
+        if (
+          (x.id === args?.target || x.id === args?.dragged) &&
+          x.kind === "bookmark"
+        ) {
+          x.parent_id = folder.id;
+        }
+      }
+      return null;
+    }
+    case "reorder_bookmarks": {
+      const order = new Map(
+        ((args?.ids as number[]) ?? []).map((id, i) => [id, i]),
+      );
+      BOOKMARKS.sort(
+        (a, b) =>
+          (order.get(a.id) ?? Number.MAX_SAFE_INTEGER) -
+          (order.get(b.id) ?? Number.MAX_SAFE_INTEGER),
+      );
+      return null;
+    }
     case "list_artifacts": return ARTIFACTS;
     case "get_artifact": return ARTIFACTS[0];
     case "list_history": return HISTORY;

@@ -18,7 +18,7 @@ const USE_FIXTURES =
 function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   if (USE_FIXTURES) {
     return import("@/lib/fixtures").then(
-      (m) => m.fixtureFor(cmd) as T,
+      (m) => m.fixtureFor(cmd, args) as T,
     );
   }
   return tauriInvoke<T>(cmd, args);

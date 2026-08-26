@@ -24,7 +24,7 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { SidebarRow } from "@/components/SidebarRow";
 import { SiteIcon } from "@/components/SiteIcon";
@@ -127,6 +127,20 @@ export function Sidebar({
   const [openFolder, setOpenFolder] = useState<number | null>(null);
 
   const roots = bookmarks.filter((b) => b.parent_id === null);
+
+  // A folder dissolves the moment its last pin leaves (storage does the
+  // delete), so the open-folder id can go stale mid-session. Clear it
+  // rather than let a future folder inherit a recycled rowid and spring
+  // open unasked.
+  useEffect(() => {
+    if (
+      openFolder !== null &&
+      !bookmarks.some((b) => b.id === openFolder && b.kind === "folder")
+    ) {
+      setOpenFolder(null);
+    }
+  }, [bookmarks, openFolder]);
+
   const childrenOf = (folderId: number) =>
     bookmarks.filter((b) => b.parent_id === folderId);
   const open = openFolder !== null ? childrenOf(openFolder) : [];
@@ -138,6 +152,10 @@ export function Sidebar({
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
   );
+
+  /** The open folder's tray, measured on drop: a folder pin released
+      inside it stays put; released anywhere else, it leaves the folder. */
+  const trayRef = useRef<HTMLUListElement | null>(null);
 
   // Deduped: report only transitions, not every pointer move.
   const overPageRef = useRef(false);
@@ -192,10 +210,30 @@ export function Sidebar({
     }
     if (target && centred && dragged.kind === "bookmark" && target.id !== dragged.id) {
       if (target.kind === "folder") {
-        onMoveBookmark(dragged.id, target.id);
-      } else if (dragged.parent_id === null) {
-        onGroupBookmarks(target.id, dragged.id);
+        if (dragged.parent_id !== target.id) onMoveBookmark(dragged.id, target.id);
+        return;
       }
+      if (dragged.parent_id === null) {
+        onGroupBookmarks(target.id, dragged.id);
+        return;
+      }
+      // A folder pin centred on a top-level pin falls through: it reads
+      // as "put it back up there", not "start a second folder".
+    }
+    // A folder pin released anywhere but its own tray leaves the folder.
+    // The tray is the only "stay" region — the grid, the tab list, the
+    // gaps between them all mean "out". Forgiving on purpose: the exact
+    // landing spot is recoverable by reordering; being trapped is not.
+    if (dragged.parent_id !== null) {
+      const tray = trayRef.current?.getBoundingClientRect();
+      const inTray =
+        !!at &&
+        !!tray &&
+        at.left + at.width / 2 >= tray.left &&
+        at.left + at.width / 2 <= tray.right &&
+        at.top + at.height / 2 >= tray.top &&
+        at.top + at.height / 2 <= tray.bottom;
+      if (!inTray) onMoveBookmark(dragged.id, null);
       return;
     }
     if (!over || active.id === over.id) return;
@@ -323,10 +361,13 @@ export function Sidebar({
               </SortableContext>
 
               {/* The open folder's pins, spread on a recessed surface
-                  directly below the grid. Plain tiles — order inside a
-                  folder is arrival order for now. */}
+                  directly below the grid. Draggable: release one outside
+                  this tray and it leaves the folder — back to the grid,
+                  into another folder, or onto the page as a split. Order
+                  inside a folder is still arrival order. */}
               {openFolder !== null && open.length > 0 && (
                 <ul
+                  ref={trayRef}
                   role="list"
                   aria-label={`Pins in ${
                     roots.find((b) => b.id === openFolder)?.title ?? "folder"
@@ -335,10 +376,16 @@ export function Sidebar({
                 >
                   {open.map((b) => (
                     <li key={b.id}>
-                      <button
-                        type="button"
-                        aria-label={b.title || b.url}
-                        title={`${b.title || b.url}\n${b.url}`}
+                      <DraggableFolderPin
+                        bookmark={b}
+                        icon={
+                          <SiteIcon
+                            url={b.url}
+                            icon={iconFor(b.url)}
+                            size={16}
+                            className="rounded"
+                          />
+                        }
                         onClick={() => onOpenBookmark(b.url)}
                         onAuxClick={(e) => {
                           if (e.button === 1) {
@@ -347,15 +394,7 @@ export function Sidebar({
                           }
                         }}
                         onContextMenu={(e) => onBookmarkContextMenu(e, b.id)}
-                        className="flex aspect-square w-full items-center justify-center rounded-lg bg-muted transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                      >
-                        <SiteIcon
-                          url={b.url}
-                          icon={iconFor(b.url)}
-                          size={16}
-                          className="rounded"
-                        />
-                      </button>
+                      />
                     </li>
                   ))}
                 </ul>
@@ -540,6 +579,62 @@ function DraggableTabRow({
           ) : undefined
         }
       />
+    </div>
+  );
+}
+
+/**
+ * A pin inside the open folder's tray. Draggable but not sortable —
+ * the tray keeps arrival order — so this is the tab-row pattern, not
+ * SortableTile: a bare useDraggable whose numeric id lands in the same
+ * handleDragEnd as everything else. Where it's released decides what
+ * happens: inside the tray, nothing; anywhere else in the sidebar, out
+ * of the folder; centred on another folder, into that one; past the
+ * sidebar's edge, a split.
+ */
+function DraggableFolderPin({
+  bookmark,
+  icon,
+  onClick,
+  onAuxClick,
+  onContextMenu,
+}: {
+  bookmark: Bookmark;
+  icon: React.ReactNode;
+  onClick: () => void;
+  onAuxClick: (e: React.MouseEvent) => void;
+  onContextMenu: (e: React.MouseEvent) => void;
+}) {
+  const { attributes, listeners, setNodeRef, transform, isDragging } =
+    useDraggable({ id: bookmark.id });
+
+  const name = bookmark.title || bookmark.url;
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={{
+        transform: CSS.Translate.toString(transform),
+        opacity: isDragging ? 0.4 : 1,
+        // Above the grid tiles while in flight, or the drag preview
+        // slides underneath the tile it is about to land on.
+        zIndex: isDragging ? 10 : undefined,
+        position: "relative",
+      }}
+    >
+      <button
+        type="button"
+        aria-label={name}
+        title={`${name}\n${bookmark.url}`}
+        onClick={onClick}
+        onAuxClick={onAuxClick}
+        onContextMenu={onContextMenu}
+        className="flex aspect-square w-full items-center justify-center rounded-lg bg-muted transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        {...attributes}
+        {...listeners}
+      >
+        {icon}
+      </button>
     </div>
   );
 }
