@@ -26,6 +26,7 @@ import { CSS } from "@dnd-kit/utilities";
 
 import { useEffect, useRef, useState } from "react";
 
+import { PendingTabRow } from "@/components/PendingTabRow";
 import { SidebarRow } from "@/components/SidebarRow";
 import { SiteIcon } from "@/components/SiteIcon";
 import { Button } from "@/components/ui/button";
@@ -77,6 +78,9 @@ export function Sidebar({
   onSelectTab,
   onCloseTab,
   onNewTab,
+  pendingNewTab,
+  onCommitPendingNewTab,
+  onCancelPendingNewTab,
   onTabContextMenu,
   onOpenBookmark,
   onOpenBookmarkInNewTab,
@@ -102,6 +106,11 @@ export function Sidebar({
   onSelectTab: (id: string) => void;
   onCloseTab: (id: string) => void;
   onNewTab: () => void;
+  /** A new tab is being typed: the row takes the "New tab" row's place
+      until it has somewhere to go. */
+  pendingNewTab: boolean;
+  onCommitPendingNewTab: (text: string) => void;
+  onCancelPendingNewTab: () => void;
   onTabContextMenu: (e: React.MouseEvent, id: string) => void;
   onOpenBookmark: (url: string) => void;
   onOpenBookmarkInNewTab: (url: string) => void;
@@ -372,7 +381,10 @@ export function Sidebar({
                   aria-label={`Pins in ${
                     roots.find((b) => b.id === openFolder)?.title ?? "folder"
                   }`}
-                  className="mt-1.5 grid shrink-0 grid-cols-4 gap-1.5 rounded-lg bg-card p-1.5"
+                  // The tray spills out of the grid it belongs to, so it
+                  // arrives on the same drop as everything else summoned
+                  // from above it.
+                  className="mt-1.5 grid shrink-0 grid-cols-4 gap-1.5 rounded-lg bg-card p-1.5 motion-safe:animate-[np-drop_160ms_ease-out]"
                 >
                   {open.map((b) => (
                     <li key={b.id}>
@@ -425,11 +437,18 @@ export function Sidebar({
                 </li>
               ))}
             </ul>
-            <SidebarRow
-              label="New tab"
-              icon={<Plus size={12} strokeWidth={1.75} />}
-              onClick={onNewTab}
-            />
+            {pendingNewTab ? (
+              <PendingTabRow
+                onCommit={onCommitPendingNewTab}
+                onCancel={onCancelPendingNewTab}
+              />
+            ) : (
+              <SidebarRow
+                label="New tab"
+                icon={<Plus size={12} strokeWidth={1.75} />}
+                onClick={onNewTab}
+              />
+            )}
           </div>
         </DndContext>
       </nav>
@@ -629,7 +648,7 @@ function DraggableFolderPin({
         onClick={onClick}
         onAuxClick={onAuxClick}
         onContextMenu={onContextMenu}
-        className="flex aspect-square w-full items-center justify-center rounded-lg bg-muted transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        className="flex aspect-square w-full items-center justify-center rounded-lg bg-muted transition-[background-color,transform] duration-150 ease-out hover:bg-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring motion-safe:hover:-translate-y-px"
         {...attributes}
         {...listeners}
       >
@@ -680,10 +699,14 @@ function SortableTile({
         // A tone step, not an outline — and it steps off `--muted`,
         // which is the sidebar's own ground, so the step is
         // muted→accent rather than background→muted.
+        // Pointing at a tile lifts it a pixel, the same answer Home's
+        // note cards give: space moves, brightness is left alone.
         className={cn(
-          "flex aspect-square w-full items-center justify-center rounded-xl transition-colors",
+          "flex aspect-square w-full items-center justify-center rounded-xl transition-[background-color,transform] duration-150 ease-out",
           "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
-          selected ? "bg-accent" : "bg-accent/60 hover:bg-accent",
+          selected
+            ? "bg-accent"
+            : "bg-accent/60 hover:bg-accent motion-safe:hover:-translate-y-px",
         )}
         {...attributes}
         {...listeners}

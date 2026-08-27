@@ -10,6 +10,7 @@ import {
   Columns2,
   NotebookText,
   PanelLeft,
+  PanelRight,
   Plus,
   RotateCw,
   Star,
@@ -17,6 +18,7 @@ import {
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { ContextMenu, type ContextMenuItem } from "@/components/ContextMenu";
 import { Home } from "@/components/Home";
 import { Sidebar, type Selection, type Tab } from "@/components/Sidebar";
 import { NotesPanel } from "@/components/panels/NotesPanel";
@@ -46,6 +48,20 @@ import { resolveQuery } from "@/lib/url";
 import { cn } from "@/lib/utils";
 
 const BLANK_URL = "about:blank";
+
+/**
+ * The one structural duration: how long the page and the chrome beside
+ * it take to reach a new layout after the sidebar or Notes changes it.
+ *
+ * The number is deliberately written twice. The native page is tweened
+ * over rAF from here; the chrome is tweened by CSS, where the value has
+ * to be a literal Tailwind can see (`duration-[220ms]`) and the curve
+ * has to be restated as `ease-out-cubic` — the bezier twin of the
+ * tween's 1-(1-t)^3 (see `--ease-out-cubic` in index.css). Change one
+ * without the other and the sidebar and the page stop arriving
+ * together.
+ */
+const FRAME_MS = 220;
 
 function uuid(): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -148,7 +164,7 @@ function App() {
     ipc.resizeContent(r, id).catch(() => {});
   }, []);
   const tweenFrame = useCallback(
-    (id: string, to: ContentRect, ms = 220, onDone?: () => void) => {
+    (id: string, to: ContentRect, ms = FRAME_MS, onDone?: () => void) => {
       const from = lastFramesRef.current.get(id);
       const reduced = window.matchMedia(
         "(prefers-reduced-motion: reduce)",
@@ -182,6 +198,39 @@ function App() {
       tweensRef.current.set(id, requestAnimationFrame(tick));
     },
     [sendFrame],
+  );
+  /**
+   * Put every tab on one rect. Recording it for all of them is the
+   * point: a hidden tab that missed a reframe would otherwise tween
+   * from wherever it last was — a page that visibly slides in from the
+   * old geometry the first time you toggle the sidebar after switching
+   * to it.
+   */
+  const broadcastFrame = useCallback((r: ContentRect) => {
+    ipc.resizeContent(r).catch(() => {});
+    for (const t of tabsRef.current) lastFramesRef.current.set(t.id, r);
+  }, []);
+  /**
+   * Stop every mid-flight tween. A live drag — the window edge, the
+   * split divider — is the user's own hand on the frame, and an
+   * animation still interpolating toward a rect the drag has already
+   * left would spend its remaining frames pulling against the pointer.
+   */
+  const cancelTweens = useCallback(() => {
+    for (const raf of tweensRef.current.values()) cancelAnimationFrame(raf);
+    tweensRef.current.clear();
+  }, []);
+  /**
+   * Give a tab its webview and record the frame it was born at. The
+   * record is what makes the first move of a brand-new tab an
+   * animation: `tweenFrame` with no known origin can only teleport.
+   */
+  const openTabAt = useCallback(
+    async (id: string, url: string, r: ContentRect) => {
+      await ipc.openTab(id, url, r);
+      lastFramesRef.current.set(id, r);
+    },
+    [],
   );
 
   /**
@@ -348,13 +397,13 @@ function App() {
   /** Give a dormant (session-restored) tab its webview and show it. */
   const materializeTab = useCallback(
     async (id: string, url: string) => {
-      await ipc.openTab(id, url, rectNow());
+      await openTabAt(id, url, rectNow());
       await ipc.activateTab(id);
       setTabs((prev) =>
         prev.map((t) => (t.id === id ? { ...t, hasWebview: true } : t)),
       );
     },
-    [rectNow],
+    [rectNow, openTabAt],
   );
   const materializeTabRef = useRef(materializeTab);
   materializeTabRef.current = materializeTab;
@@ -481,8 +530,16 @@ function App() {
   // Keep every tab webview at the computed frame. Chrome height is now
   // constant, so this fires only on window resize, sidebar toggle and
   // drawer toggle — never because a second tab or a bookmark appeared.
+  //
+  // `live` says the call came from a real window resize, where the
+  // pointer IS the animation and every frame must go out at once. A
+  // dependency change (the sidebar toggled, Notes opened) must NOT send
+  // one: this effect is declared above the geometry effect that tweens
+  // those, so a frame sent here lands the page at the destination
+  // before the tween starts and leaves it nothing to travel — which is
+  // exactly why toggling the sidebar used to snap.
   useEffect(() => {
-    const sync = () => {
+    const sync = (live: boolean) => {
       const w = window.innerWidth;
       setWinW(w);
       const wouldBe = pageWidthIfSidebarOpen(w, sidebarWidth, notesWidth);
@@ -493,21 +550,23 @@ function App() {
         if (cur && wouldBe >= SIDEBAR_RESTORE_PAGE_WIDTH) return false;
         return cur;
       });
+      if (!live) return;
+      cancelTweens();
       const pair = splitPairRef.current;
       if (pair) {
         const [ra, rb] = splitRects(rectNow(), splitRatioRef.current);
         sendFrame(pair[0], ra);
         sendFrame(pair[1], rb);
       } else {
-        ipc.resizeContent(rectNow()).catch(() => {});
-        // Keep the tween engine's notion of "where the frame is" true,
-        // or the next animation would launch from a stale rect.
-        lastFramesRef.current.set(activeIdRef.current, rectNow());
+        // Broadcast, not a tween: the pointer is already dragging the
+        // window edge, so the frame has to keep up with it.
+        broadcastFrame(rectNow());
       }
     };
-    window.addEventListener("resize", sync);
-    sync();
-    return () => window.removeEventListener("resize", sync);
+    const onResize = () => sync(true);
+    window.addEventListener("resize", onResize);
+    sync(false);
+    return () => window.removeEventListener("resize", onResize);
   }, [rectNow, sidebarWidth, sidebarOpen, notesWidth]);
 
   // Panels take over the content column, so the native page must hide —
@@ -534,11 +593,11 @@ function App() {
   useEffect(() => {
     if (!splitPair) {
       if (activeTab?.hasWebview && !panelOpen) {
-        tweenFrame(activeTab.id, rectNow(), 220, () => {
-          ipc.resizeContent(rectNow()).catch(() => {});
+        tweenFrame(activeTab.id, rectNow(), FRAME_MS, () => {
+          broadcastFrame(rectNow());
         });
       } else {
-        ipc.resizeContent(rectNow()).catch(() => {});
+        broadcastFrame(rectNow());
       }
       return;
     }
@@ -613,7 +672,7 @@ function App() {
       if (tab.hasWebview) {
         await ipc.navigateTab(tab.id, url);
       } else {
-        await ipc.openTab(tab.id, url, rectNow());
+        await openTabAt(tab.id, url, rectNow());
         await ipc.activateTab(tab.id);
       }
       setTabs((prev) =>
@@ -625,7 +684,7 @@ function App() {
       );
       setInput(url);
     },
-    [activeId, tabs, rectNow],
+    [activeId, tabs, rectNow, openTabAt],
   );
 
   const openNewTab = useCallback(
@@ -656,7 +715,7 @@ function App() {
       const hasWebview = resolved !== BLANK_URL;
       setSelection({ kind: "tab" });
       if (hasWebview) {
-        await ipc.openTab(id, resolved, rectNow());
+        await openTabAt(id, resolved, rectNow());
         await ipc.activateTab(id);
       } else {
         await ipc.hideAllTabs();
@@ -669,11 +728,66 @@ function App() {
       setInput(hasWebview ? resolved : "");
       inputRef.current?.focus();
     },
-    [startPage, rectNow],
+    [startPage, rectNow, openTabAt],
   );
 
   const openNewTabRef = useRef(openNewTab);
   openNewTabRef.current = openNewTab;
+
+  /**
+   * A new tab that has not been given a destination yet.
+   *
+   * Nothing is created while this is set: no row in the tab list, no
+   * webview, nothing in the session file. The draft lives in the input
+   * that collects it, and cancelling leaves the browser exactly as it
+   * was found.
+   */
+  const [pendingNewTab, setPendingNewTab] = useState(false);
+  const pendingNewTabRef = useRef(false);
+  useEffect(() => {
+    pendingNewTabRef.current = pendingNewTab;
+  }, [pendingNewTab]);
+
+  /**
+   * ⌘T, the toolbar's +, and the sidebar's New tab row.
+   *
+   * With a start page configured there is nothing to ask, so the old
+   * path stands. Otherwise the input takes over: the sidebar's own row
+   * when the list is on screen, the URL bar when it is not. A closed
+   * sidebar is deliberately left closed — auto-revealing it would push
+   * the live page 240px sideways to make room for a 26px field, and the
+   * hover-reveal lifecycle belongs to the pointer, not to a shortcut.
+   */
+  const startNewTab = useCallback(() => {
+    const resolved = resolveStartUrl(startPage);
+    if (resolved) {
+      openNewTabRef.current(resolved).catch(() => {});
+      return;
+    }
+    setPendingNewTab(true);
+    if (!effectiveSidebarOpen) {
+      setInput("");
+      inputRef.current?.focus();
+    }
+  }, [startPage, effectiveSidebarOpen]);
+
+  const commitPendingNewTab = useCallback(
+    (text: string) => {
+      setPendingNewTab(false);
+      const url = resolveQuery(text, searchEngine);
+      if (url) openNewTabRef.current(url).catch(() => {});
+    },
+    [searchEngine],
+  );
+
+  const cancelPendingNewTab = useCallback(() => {
+    setPendingNewTab(false);
+    if (effectiveSidebarOpen) return;
+    // URL-bar mode borrowed the field; hand it back to the page it
+    // belongs to rather than leaving it empty over a loaded tab.
+    const act = tabsRef.current.find((t) => t.id === activeIdRef.current);
+    setInput(act && act.url !== BLANK_URL ? act.url : "");
+  }, [effectiveSidebarOpen]);
 
   /** Transient download status, bottom-right of the chrome. */
   const [toast, setToast] = useState<{ text: string; ok: boolean } | null>(
@@ -873,8 +987,7 @@ function App() {
       }
       const id = uuid();
       const paneB = splitRects(rectNow(), splitRatioRef.current)[1];
-      await ipc.openTab(id, url, paneB);
-      lastFramesRef.current.set(id, paneB);
+      await openTabAt(id, url, paneB);
       setTabs((prev) => [
         ...prev,
         { id, url, title: hostnameFor(url), hasWebview: true },
@@ -882,7 +995,7 @@ function App() {
       setSelection({ kind: "tab" });
       setSplitPair([act.id, id]);
     },
-    [navigateTo, rectNow],
+    [navigateTo, rectNow, openTabAt],
   );
 
   /**
@@ -903,6 +1016,37 @@ function App() {
   }, []);
   const toggleSplitRef = useRef(toggleSplit);
   toggleSplitRef.current = toggleSplit;
+
+  /** Which tab row was right-clicked, and where the pointer was. */
+  const [tabMenu, setTabMenu] = useState<{
+    x: number;
+    y: number;
+    tabId: string;
+  } | null>(null);
+  const closeTabMenu = useCallback(() => setTabMenu(null), []);
+
+  /**
+   * Pair a tab with the active one, on the named side. Reads the live
+   * lists through refs so a menu opened before an async wake still acts
+   * on the tabs that exist when the item is chosen. An existing pair is
+   * replaced, not stacked — there is only ever one split.
+   */
+  const splitWithActive = useCallback(
+    async (tabId: string, side: "left" | "right") => {
+      const act = tabsRef.current.find((t) => t.id === activeIdRef.current);
+      const clicked = tabsRef.current.find((t) => t.id === tabId);
+      if (!clicked || !act || clicked.id === act.id) return;
+      // A pane has to have a page in it: the active tab needs a live
+      // webview, and a blank tab has no URL to wake into one.
+      if (!act.hasWebview || clicked.url === BLANK_URL) return;
+      if (!clicked.hasWebview) {
+        await materializeTabRef.current(clicked.id, clicked.url);
+      }
+      setSelection({ kind: "tab" });
+      setSplitPair(side === "left" ? [clicked.id, act.id] : [act.id, clicked.id]);
+    },
+    [],
+  );
 
   /** Toolbar scissors: clip the current page immediately. */
   const clipPage = useCallback(async () => {
@@ -934,7 +1078,9 @@ function App() {
     {
       switch (action) {
         case "new_tab":
-          openNewTab().catch(() => {});
+          // menu.rs takes the first responder back from the page before
+          // emitting this, so the field this focuses can receive keys.
+          startNewTab();
           break;
         case "new_note": {
           // ⌘N: a note next to whatever you're watching. The active
@@ -1095,6 +1241,14 @@ function App() {
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
+      // An unfinished new tab is the newest layer, so it goes first.
+      // The sidebar's row stops the event itself; this is the URL-bar
+      // path, where the field has no Escape handler of its own.
+      if (pendingNewTabRef.current) {
+        e.preventDefault();
+        cancelPendingNewTab();
+        return;
+      }
       // Mid-sentence Esc means "stop typing", not "take my card away".
       const el = document.activeElement as HTMLElement | null;
       if (
@@ -1120,14 +1274,21 @@ function App() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [panelOpen, notesMode]);
+  }, [panelOpen, notesMode, cancelPendingNewTab]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     const url = resolveQuery(input, searchEngine);
     if (!url) return;
     try {
-      await navigateTo(url);
+      // A pending new tab borrowed this field, so Enter here opens a
+      // tab rather than steering the one already on screen.
+      if (pendingNewTabRef.current) {
+        setPendingNewTab(false);
+        await openNewTabRef.current(url);
+      } else {
+        await navigateTo(url);
+      }
     } catch {
       return; // e.g. the backend refused a non-web URL scheme
     }
@@ -1166,128 +1327,179 @@ function App() {
           }}
         />
       )}
-      {effectiveSidebarOpen && (
+      {/* Sidebar host. Stays mounted at zero width when closed: CSS can
+          transition a width, but it cannot transition a subtree that
+          does not exist, and the column has to travel with the page
+          beside it — same 220ms, same cubic ease-out the native frame
+          tween runs (see FRAME_MS).
+
+          The inner track keeps its full width and slides left by
+          exactly what the host lost, so the sidebar's right edge and
+          the page's left edge stay welded together for the whole
+          motion. That also means nothing is ever drawn past the host's
+          right edge, so no `overflow-hidden` is needed here — which
+          matters, because clipping would sever the drag preview of a
+          tab being pulled out onto the page.
+
+          `inert` while closed: the subtree is off-window at negative x,
+          and a keyboard user must not be able to tab into twenty
+          invisible tab rows. */}
+      <div
+        className="h-full shrink-0 motion-safe:transition-[width] motion-safe:duration-[220ms] motion-safe:ease-out-cubic"
+        style={{ width: effectiveSidebarOpen ? sidebarWidth : 0 }}
+        inert={!effectiveSidebarOpen}
+        onMouseEnter={() => {
+          if (hoverCloseTimerRef.current !== null) {
+            window.clearTimeout(hoverCloseTimerRef.current);
+            hoverCloseTimerRef.current = null;
+          }
+        }}
+        onMouseLeave={(e) => {
+          // Only a hover-revealed sidebar closes itself, and only
+          // when the pointer left for a native webview (relatedTarget
+          // is null then) — moving to the toolbar keeps it open.
+          if (!hoverRevealedRef.current || e.relatedTarget) return;
+          hoverCloseTimerRef.current = window.setTimeout(() => {
+            hoverRevealedRef.current = false;
+            setSidebarOpen(false);
+          }, 400);
+        }}
+      >
         <div
-          className="flex h-full shrink-0"
-          onMouseEnter={() => {
-            if (hoverCloseTimerRef.current !== null) {
-              window.clearTimeout(hoverCloseTimerRef.current);
-              hoverCloseTimerRef.current = null;
-            }
-          }}
-          onMouseLeave={(e) => {
-            // Only a hover-revealed sidebar closes itself, and only
-            // when the pointer left for a native webview (relatedTarget
-            // is null then) — moving to the toolbar keeps it open.
-            if (!hoverRevealedRef.current || e.relatedTarget) return;
-            hoverCloseTimerRef.current = window.setTimeout(() => {
-              hoverRevealedRef.current = false;
-              setSidebarOpen(false);
-            }, 400);
+          className="h-full motion-safe:transition-transform motion-safe:duration-[220ms] motion-safe:ease-out-cubic"
+          style={{
+            width: sidebarWidth,
+            transform: effectiveSidebarOpen
+              ? undefined
+              : `translateX(${-sidebarWidth}px)`,
           }}
         >
-        <Sidebar
-          width={sidebarWidth}
-          tabs={tabs}
-          activeTabId={activeId}
-          loadingTabs={loadingTabs}
-          bookmarks={bookmarks}
-          selection={selection}
-          iconFor={iconFor}
-          onToggleSidebar={() => setSidebarOpen(false)}
-          onSelectTab={(id) => activateTabById(id)}
-          onCloseTab={(id) => closeTabById(id)}
-          onNewTab={() => openNewTab()}
-          onTabContextMenu={(e) => e.preventDefault()}
-          onOpenBookmark={(url) => {
-            navigateTo(url).catch(() => {});
-          }}
-          onOpenBookmarkInNewTab={(url) => {
-            openNewTab(url).catch(() => {});
-          }}
-          onBookmarkContextMenu={(e, id) => {
-            e.preventDefault();
-            ipc.showBookmarkMenu(id).catch(() => {});
-          }}
-          onReorderBookmarks={(ids) => {
-            setBookmarks((prev) => {
-              const byId = new Map(prev.map((b) => [b.id, b]));
-              const next = ids
-                .map((id) => byId.get(id))
-                .filter((b): b is Bookmark => !!b);
-              ipc.reorderBookmarks(ids).catch(() => {
-                ipc.listBookmarks().then(setBookmarks).catch(() => {});
+          <Sidebar
+            width={sidebarWidth}
+            tabs={tabs}
+            activeTabId={activeId}
+            loadingTabs={loadingTabs}
+            bookmarks={bookmarks}
+            selection={selection}
+            iconFor={iconFor}
+            onToggleSidebar={() => setSidebarOpen(false)}
+            onSelectTab={(id) => activateTabById(id)}
+            onCloseTab={(id) => closeTabById(id)}
+            onNewTab={startNewTab}
+            pendingNewTab={pendingNewTab}
+            onCommitPendingNewTab={commitPendingNewTab}
+            onCancelPendingNewTab={cancelPendingNewTab}
+            onTabContextMenu={(e, id) => {
+              e.preventDefault();
+              setTabMenu({ x: e.clientX, y: e.clientY, tabId: id });
+            }}
+            onOpenBookmark={(url) => {
+              navigateTo(url).catch(() => {});
+            }}
+            onOpenBookmarkInNewTab={(url) => {
+              openNewTab(url).catch(() => {});
+            }}
+            onBookmarkContextMenu={(e, id) => {
+              e.preventDefault();
+              ipc.showBookmarkMenu(id).catch(() => {});
+            }}
+            onReorderBookmarks={(ids) => {
+              setBookmarks((prev) => {
+                const byId = new Map(prev.map((b) => [b.id, b]));
+                const next = ids
+                  .map((id) => byId.get(id))
+                  .filter((b): b is Bookmark => !!b);
+                ipc.reorderBookmarks(ids).catch(() => {
+                  ipc.listBookmarks().then(setBookmarks).catch(() => {});
+                });
+                return next;
               });
-              return next;
-            });
-          }}
-          onSelectPanel={selectPanel}
-          onDropTabToSplit={(tabId) => {
-            const act = tabsRef.current.find(
-              (t) => t.id === activeIdRef.current,
-            );
-            const dropped = tabsRef.current.find((t) => t.id === tabId);
-            if (!dropped || dropped.url === BLANK_URL) return;
-            // A dormant restored tab can be dropped to split too: wake
-            // it first, then pair it.
-            const ready = dropped.hasWebview
-              ? Promise.resolve()
-              : materializeTabRef.current(dropped.id, dropped.url);
-            ready
-              .then(() => {
-                if (!act?.hasWebview || act.id === dropped.id) {
-                  return activateTabById(tabId);
-                }
-                setSelection({ kind: "tab" });
-                setSplitPair([act.id, dropped.id]);
-              })
-              .catch(() => {});
-          }}
-          onDropBookmarkToSplit={(url) => {
-            openInSplit(url).catch(() => {});
-          }}
-          onSplitDragOver={setSplitDropHint}
-          onPinTab={(tabId, folderId) => {
-            const t = tabsRef.current.find((x) => x.id === tabId);
-            // Dormant restored tabs pin fine — the URL is real even
-            // before the webview exists. Only a blank tab has nothing
-            // to pin.
-            if (!t || t.url === BLANK_URL) return;
-            if (bookmarksRef.current.some((b) => b.url === t.url)) return;
-            (async () => {
-              const b = await ipc.addBookmark(t.url, t.title);
-              if (folderId !== null) await ipc.moveBookmark(b.id, folderId);
-              setBookmarks(await ipc.listBookmarks());
-            })().catch(() => {});
-          }}
-          onGroupBookmarks={(targetId, draggedId) => {
-            (async () => {
-              await ipc.groupBookmarks(targetId, draggedId);
-              setBookmarks(await ipc.listBookmarks());
-            })().catch(() => {});
-          }}
-          onMoveBookmark={(id, folderId) => {
-            (async () => {
-              await ipc.moveBookmark(id, folderId);
-              setBookmarks(await ipc.listBookmarks());
-            })().catch(() => {});
-          }}
-        />
+            }}
+            onSelectPanel={selectPanel}
+            onDropTabToSplit={(tabId) => {
+              const act = tabsRef.current.find(
+                (t) => t.id === activeIdRef.current,
+              );
+              const dropped = tabsRef.current.find((t) => t.id === tabId);
+              if (!dropped || dropped.url === BLANK_URL) return;
+              // A dormant restored tab can be dropped to split too: wake
+              // it first, then pair it.
+              const ready = dropped.hasWebview
+                ? Promise.resolve()
+                : materializeTabRef.current(dropped.id, dropped.url);
+              ready
+                .then(() => {
+                  if (!act?.hasWebview || act.id === dropped.id) {
+                    return activateTabById(tabId);
+                  }
+                  setSelection({ kind: "tab" });
+                  setSplitPair([act.id, dropped.id]);
+                })
+                .catch(() => {});
+            }}
+            onDropBookmarkToSplit={(url) => {
+              openInSplit(url).catch(() => {});
+            }}
+            onSplitDragOver={setSplitDropHint}
+            onPinTab={(tabId, folderId) => {
+              const t = tabsRef.current.find((x) => x.id === tabId);
+              // Dormant restored tabs pin fine — the URL is real even
+              // before the webview exists. Only a blank tab has nothing
+              // to pin.
+              if (!t || t.url === BLANK_URL) return;
+              if (bookmarksRef.current.some((b) => b.url === t.url)) return;
+              (async () => {
+                const b = await ipc.addBookmark(t.url, t.title);
+                if (folderId !== null) await ipc.moveBookmark(b.id, folderId);
+                setBookmarks(await ipc.listBookmarks());
+              })().catch(() => {});
+            }}
+            onGroupBookmarks={(targetId, draggedId) => {
+              (async () => {
+                await ipc.groupBookmarks(targetId, draggedId);
+                setBookmarks(await ipc.listBookmarks());
+              })().catch(() => {});
+            }}
+            onMoveBookmark={(id, folderId) => {
+              (async () => {
+                await ipc.moveBookmark(id, folderId);
+                setBookmarks(await ipc.listBookmarks());
+              })().catch(() => {});
+            }}
+          />
         </div>
-      )}
+      </div>
 
       {/* Content column: toolbar, progress, then the page (native) or a
           React surface occupying the same box. */}
       <div className="flex min-w-0 flex-1 flex-col">
+        {/* The left inset travels with the sidebar. When the sidebar
+            closes, this row inherits window x=0 and has to clear the
+            traffic lights, so the padding grows 8 → 76 on the same
+            curve as the column that just vacated the space — otherwise
+            the toolbar's contents jump 68px at the end of a motion
+            everything else spent 220ms on. */}
         <div
           data-tauri-drag-region
-          className="flex shrink-0 items-center gap-1 pr-2"
+          className="flex shrink-0 items-center gap-1 pr-2 motion-safe:transition-[padding] motion-safe:duration-[220ms] motion-safe:ease-out-cubic"
           style={{
             height: TOOLBAR_HEIGHT,
             paddingLeft: effectiveSidebarOpen ? 8 : TRAFFIC_LIGHT_INSET,
           }}
         >
-          {!effectiveSidebarOpen && (
+          {/* Show-sidebar. Kept mounted and collapsed rather than
+              unmounted: it is the sidebar's own control handing itself
+              to the toolbar, so it grows into place instead of popping
+              in and shoving the nav buttons 32px sideways. The flex gap
+              is part of its footprint and collapses with it. */}
+          <div
+            className="shrink-0 overflow-hidden motion-safe:transition-[width,margin] motion-safe:duration-[220ms] motion-safe:ease-out-cubic"
+            style={{
+              width: effectiveSidebarOpen ? 0 : 28,
+              marginRight: effectiveSidebarOpen ? -4 : 0,
+            }}
+            inert={effectiveSidebarOpen}
+          >
             <Button
               variant="ghost"
               size="icon"
@@ -1301,7 +1513,7 @@ function App() {
             >
               <PanelLeft strokeWidth={1.5} />
             </Button>
-          )}
+          </div>
           <Button
             variant="ghost"
             size="icon"
@@ -1382,11 +1594,13 @@ function App() {
             {/* Find bar. Same reasoning as the download chip: the
                 toolbar is the only strip the native page can never
                 paint over, and the chrome's height never changes, so
-                opening it reflows nothing. */}
+                opening it reflows nothing. It is summoned from this
+                strip, so it arrives on the same drop the Notes card
+                does. */}
             {findOpen && (
               <div
                 data-tauri-drag-region="false"
-                className="flex h-[26px] shrink-0 items-center rounded-md border border-transparent bg-accent/50 pl-2 transition-colors focus-within:border-[color-mix(in_srgb,var(--select)_50%,transparent)] focus-within:bg-accent"
+                className="flex h-[26px] shrink-0 items-center rounded-md border border-transparent bg-accent/50 pl-2 transition-colors focus-within:border-[color-mix(in_srgb,var(--select)_50%,transparent)] focus-within:bg-accent motion-safe:animate-[np-drop_160ms_ease-out]"
               >
                 <input
                   ref={findInputRef}
@@ -1471,7 +1685,7 @@ function App() {
               <span
                 role="status"
                 className={cn(
-                  "max-w-56 shrink truncate rounded-md bg-muted px-2 py-1 text-[11px]",
+                  "max-w-56 shrink truncate rounded-md bg-muted px-2 py-1 text-[11px] motion-safe:animate-[np-drop_160ms_ease-out]",
                   toast.ok ? "text-muted-foreground" : "text-danger",
                 )}
                 title={toast.text}
@@ -1512,7 +1726,7 @@ function App() {
               size="icon"
               aria-label="New tab"
               title="New tab · ⌘T"
-              onClick={() => openNewTab()}
+              onClick={startNewTab}
             >
               <Plus strokeWidth={1.5} />
             </Button>
@@ -1595,6 +1809,9 @@ function App() {
                 onPointerDown={(e) => {
                   e.preventDefault();
                   dividerDraggingRef.current = true;
+                  // The pointer takes the frames from here; anything
+                  // still settling from entering the split hands over.
+                  cancelTweens();
                   const rect = rectNow();
                   const paneSpace = rect.width - PAGE_GUTTER;
                   let raf = 0;
@@ -1675,7 +1892,7 @@ function App() {
               standard gutter on its far side. */}
           {notesMode !== null && (
             <div
-              className="shrink-0 pb-2 pr-2 motion-safe:transition-[width] motion-safe:duration-200 motion-safe:ease-out"
+              className="shrink-0 pb-2 pr-2 motion-safe:transition-[width] motion-safe:duration-[220ms] motion-safe:ease-out-cubic"
               style={{ width: notesWidth }}
             >
               <NotesPanel
@@ -1703,6 +1920,63 @@ function App() {
           )}
         </div>
       </div>
+
+      {/* Tab row menu. Fixed to the viewport, so it lives at the root
+          rather than inside the content column.
+
+          The bookmark tile menu next door is still a native NSMenu,
+          which is now the odd one out: AppKit menu items cannot carry
+          the lucide glyphs every other control in the app uses, and the
+          menu is drawn by the system rather than the palette. Moving it
+          onto this component is the obvious follow-up. */}
+      {tabMenu &&
+        (() => {
+          const clicked = tabs.find((t) => t.id === tabMenu.tabId);
+          if (!clicked) return null;
+          const canSplit =
+            hasActiveWebview &&
+            clicked.id !== activeId &&
+            clicked.url !== BLANK_URL;
+          const items: ContextMenuItem[] = [
+            {
+              label: "Split left",
+              icon: <PanelLeft size={14} strokeWidth={1.5} />,
+              disabled: !canSplit,
+              onSelect: () => {
+                splitWithActive(clicked.id, "left").catch(() => {});
+              },
+            },
+            {
+              label: "Split right",
+              icon: <PanelRight size={14} strokeWidth={1.5} />,
+              disabled: !canSplit,
+              onSelect: () => {
+                splitWithActive(clicked.id, "right").catch(() => {});
+              },
+            },
+            {
+              label: "Close tab",
+              icon: <X size={14} strokeWidth={1.5} />,
+              // The same rule the row's own close control uses: the last
+              // tab stays unless it has a page to close.
+              disabled: !(tabs.length > 1 || clicked.hasWebview),
+              onSelect: () => {
+                closeTabById(clicked.id).catch(() => {});
+              },
+            },
+          ];
+          return (
+            <ContextMenu
+              x={tabMenu.x}
+              y={tabMenu.y}
+              // React cannot paint over a native page webview, so the
+              // menu has to stay inside the chrome column.
+              maxX={effectiveSidebarOpen ? sidebarWidth : window.innerWidth}
+              items={items}
+              onClose={closeTabMenu}
+            />
+          );
+        })()}
     </div>
   );
 }
@@ -1754,7 +2028,11 @@ function BookmarkEditPanel({
       ref={panelRef}
       role="dialog"
       data-tauri-drag-region="false"
-      className="absolute left-1/2 top-8 z-50 w-[360px] -translate-x-1/2 rounded-xl border border-border bg-background p-4 text-[13px] text-foreground"
+      // Centred with a negative margin rather than -translate-x-1/2:
+      // the width is a constant, and a keyframe replaces an element's
+      // whole transform while it runs — the entrance would have thrown
+      // the card 180px to the right for its first 160ms.
+      className="absolute left-1/2 top-8 z-50 -ml-[180px] w-[360px] rounded-xl border border-border bg-background p-4 text-[13px] text-foreground motion-safe:animate-[np-drop_160ms_ease-out]"
     >
       <div className="mb-3 font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
         Edit bookmark
