@@ -24,6 +24,13 @@
   --color-select: var(--select);
   --color-danger: var(--danger);
 
+  /* The chrome's half of the tween engine's curve. `App.tsx` eases
+     native page frames with 1-(1-t)^3 over rAF; CSS cannot touch a
+     native webview, so a chrome transition that must read as the same
+     motion has to state the same curve. This bezier is that cubic
+     ease-out. Anything moving *with* the page uses it. */
+  --ease-out-cubic: cubic-bezier(0.33, 1, 0.68, 1);
+
   /* Radius scales with the surface, all derived from one knob:
      cards 12px, buttons 10px, inputs 8px, tags 6px. */
   --radius-xl: calc(var(--radius) + 2px);
@@ -378,16 +385,30 @@ body {
   }
 }
 
-/* Notes card entrance: space moves, brightness doesn't. */
+/* ────────────────────────── entrances ──────────────────────────
+   Two keyframes cover every arrival in the app, and both move space
+   only — no opacity ramp, no brightness step. Which one a surface
+   takes is decided by where it comes from, not by what it is:
+
+   `np-drop`  summoned from the toolbar and hanging off it — the Notes
+              card, the find bar, the download chip, a folder tray
+              spilling out of the grid above it.
+   `np-rise`  taking the content column — History, Network, Settings,
+              a Settings section swapping in, a note card on Home.
+
+   Both are gated at the call site with Tailwind's `motion-safe:`
+   (`@media (prefers-reduced-motion: no-preference)`), which is why
+   there are no reduced-motion overrides here: an entrance that is not
+   emitted needs no undoing. */
 @keyframes np-drop {
   from {
     transform: translateY(-6px);
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .animate-\[np-drop_160ms_ease-out\] {
-    animation: none;
+@keyframes np-rise {
+  from {
+    transform: translateY(6px) scale(0.995);
   }
 }
 

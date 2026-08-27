@@ -92,11 +92,17 @@ The UI follows akaSTYLE, Ieuan's personal design system. The rules that matter w
 - One accent: `--select` (quiet green in dark, blue in light). It marks chosen things — the active tab, selection, focus rings, connected/live state — and nothing else. `--danger` is the only other hue.
 - Tokens are OKLCH custom properties in `src/index.css`; `aka` is the default palette and dark is the reference mode. Every palette defines the full token set including `--select` and `--danger`.
 - Borders over shadows. Nothing the chrome draws carries a drop shadow.
-- Motion moves space, never brightness — no opacity pulsing, no strobe; entrances gated on reduced motion.
+- Motion moves space, never brightness — no opacity pulsing, no strobe; entrances gated on reduced motion. Durations, easings and the two shared entrance keyframes are below, under **Motion**.
 - Mono for structure (kickers: `font-mono text-[10px] font-medium uppercase tracking-[0.14em]`, the URL bar), light sans for prose.
 - Radius derives from `--radius: 0.625rem`: cards 12px (`xl`), buttons 10px (`lg`), inputs 8px (`md`), tags 6px (`sm`), code chips 4px (bare `rounded`).
 
 New select/danger values must hold ~4.5:1 contrast against their palette's background — they carry small text (active tab, error rows), not just focus rings.
+
+### Motion
+
+One scale, and a change should be able to say which rung it is on. **~150ms `ease-out`** — Tailwind's bare default — is reaction: hover, fills, a selection bar scaling in. **160ms `ease-out`** is arrival, and every entrance uses one of the two shared keyframes in `src/index.css` rather than restating a transform: `np-drop` for things summoned from the toolbar and hanging off it (the Notes card, the find bar, the download chip), `np-rise` for a surface taking the content column (History, Network, Settings, a Settings section, a note card on Home). **220ms `ease-out-cubic`** is structural — a layout the native page shares. That duration lives in `FRAME_MS` in `App.tsx` and the curve in `--ease-out-cubic`, whose bezier is the CSS twin of the rAF tween engine's `1-(1-t)^3`; the sidebar's width, the toolbar's traffic-light inset and the page's native frame all run it at once, which is the only reason opening the sidebar reads as one motion and not three.
+
+Motion moves space, never brightness — no opacity pulsing, no fade carrying an entrance, no strobe. A transform is the mechanism; a fill may follow it, never lead. Anything that moves space is gated with Tailwind's `motion-safe:` (a colour transition is not motion and stays bare), so the stylesheet needs no reduced-motion overrides — the one that remains is the progress bar's, where the fallback has to set a width rather than skip an animation. The native-frame tween checks `prefers-reduced-motion` itself and teleports. A live drag — the window edge, the split divider — is never animated: the pointer is the animation, and a tween still in flight is cancelled rather than left to pull against it.
 
 ## Voice
 

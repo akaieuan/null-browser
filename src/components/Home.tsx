@@ -53,10 +53,15 @@ export function Home({
           </div>
         ) : (
           <div className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-3">
-            {clips.slice(0, 9).map((c) => (
+            {clips.slice(0, 9).map((c, i) => (
               <HomeClipCard
                 key={c.id}
                 clip={c}
+                // Reading order, 24ms apart: the grid settles as a list
+                // rather than as one slab. Nine cards is the cap, so the
+                // last one is 192ms behind the first and the whole thing
+                // is done inside a third of a second.
+                delayMs={i * 24}
                 onOpen={() => onOpenClip(c)}
                 onOpenSource={() => onOpenUrl(c.source_url)}
               />
@@ -70,10 +75,13 @@ export function Home({
 
 function HomeClipCard({
   clip,
+  delayMs,
   onOpen,
   onOpenSource,
 }: {
   clip: Artifact;
+  /** Stagger within the grid, in milliseconds. */
+  delayMs: number;
   onOpen: () => void;
   onOpenSource: () => void;
 }) {
@@ -92,7 +100,14 @@ function HomeClipCard({
       onClick={(e) => (e.metaKey ? onOpenSource() : onOpen())}
       title={`${clip.title}\n${clip.source_url}\n⌘-click to open the source`}
       // Hover moves space, not brightness: the card lifts a step.
-      className="flex min-h-[104px] flex-col justify-between rounded-xl bg-card p-4 text-left transition-transform focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring motion-safe:hover:-translate-y-0.5"
+      //
+      // The entrance is the same idea at rest. `backwards`, not `both`:
+      // backwards holds the card at its start offset through the
+      // stagger delay (without it, a late card paints in place and then
+      // jumps back to animate), while a forwards fill would keep
+      // overriding `transform` after it lands and kill the hover lift.
+      className="flex min-h-[104px] flex-col justify-between rounded-xl bg-card p-4 text-left transition-transform focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring motion-safe:animate-[np-rise_160ms_ease-out_backwards] motion-safe:hover:-translate-y-0.5"
+      style={{ animationDelay: `${delayMs}ms` }}
     >
       <span className="line-clamp-2 w-full text-sm leading-snug text-foreground">
         {clip.title || "Untitled"}

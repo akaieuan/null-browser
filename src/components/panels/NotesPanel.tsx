@@ -128,7 +128,7 @@ export function NotesPanel({
   return (
     <aside
       aria-label="Notes"
-      className="flex h-full w-full animate-[np-drop_160ms_ease-out] flex-col overflow-hidden rounded-xl bg-card text-foreground"
+      className="flex h-full w-full flex-col overflow-hidden rounded-xl bg-card text-foreground motion-safe:animate-[np-drop_160ms_ease-out]"
     >
       <header
         className="flex shrink-0 items-center justify-between pl-4 pr-2.5"

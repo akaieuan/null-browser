@@ -39,7 +39,11 @@ export function Panel({
   );
 
   return (
-    <Card className="z-40">
+    // The surface takes the page's own rect, so it arrives the way a
+    // page would if a page could be animated: a short rise into place.
+    // One class here covers History and Network — Settings states it
+    // itself, being the one panel that does not use this frame.
+    <Card className="z-40 motion-safe:animate-[np-rise_160ms_ease-out]">
       <header className="shrink-0" style={{ height: PANEL_HEADER_HEIGHT }}>
         <div
           className={cn(
