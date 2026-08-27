@@ -1040,6 +1040,17 @@ function App() {
           activateTabById(next.id).catch(() => {});
           break;
         }
+        default:
+          // ⌘1–⌘8 jump to that tab; ⌘9 (goto_tab_9) to the last.
+          if (action.startsWith("goto_tab_")) {
+            const n = Number(action.slice("goto_tab_".length));
+            const list = tabsRef.current;
+            const target = n === 9 ? list[list.length - 1] : list[n - 1];
+            if (target && target.id !== activeIdRef.current) {
+              activateTabById(target.id).catch(() => {});
+            }
+          }
+          break;
       }
     }
   };

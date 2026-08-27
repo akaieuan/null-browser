@@ -172,7 +172,8 @@ export function fixtureFor(cmd: string, args?: Record<string, unknown>): unknown
       return null;
     }
     case "list_artifacts": return ARTIFACTS;
-    case "get_artifact": return ARTIFACTS[0];
+    case "get_artifact":
+      return ARTIFACTS.find((a) => a.id === args?.id) ?? ARTIFACTS[0];
     case "list_history": return HISTORY;
     case "list_network_events": return NETWORK;
     case "list_blocked_origins":

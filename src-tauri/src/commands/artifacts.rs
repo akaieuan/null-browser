@@ -24,7 +24,10 @@ pub fn list_artifacts(storage: State<Storage>) -> Result<Vec<Artifact>, String> 
 
 #[tauri::command]
 pub fn get_artifact(storage: State<Storage>, id: i64) -> Result<Artifact, String> {
-    storage.get_artifact(id).map_err(|e| e.to_string())
+    let artifact = storage.get_artifact(id).map_err(|e| e.to_string())?;
+    // Opening is when external edits to the file mirror get adopted —
+    // see notes::sync_from_disk for the contract.
+    Ok(notes::sync_from_disk(&storage, &artifact).unwrap_or(artifact))
 }
 
 #[tauri::command]

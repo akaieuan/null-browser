@@ -203,6 +203,23 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
             &action(app, "prev_tab", "Previous Tab", Some("Ctrl+Shift+Tab"))?,
         ],
     )?;
+    // ⌘1–⌘8 jump to that tab, ⌘9 to the last — the Chrome/Firefox
+    // convention (Safari spends these keys on favorites, which Null
+    // doesn't have).
+    window_submenu.append(&PredefinedMenuItem::separator(app)?)?;
+    for i in 1..=9u32 {
+        let label = if i == 9 {
+            "Last Tab".to_string()
+        } else {
+            format!("Tab {i}")
+        };
+        window_submenu.append(&action(
+            app,
+            &format!("goto_tab_{i}"),
+            &label,
+            Some(&format!("CmdOrCtrl+{i}")),
+        )?)?;
+    }
 
     Menu::with_items(
         app,

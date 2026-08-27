@@ -211,7 +211,18 @@ export function NotesPanel({
               <NoteRow
                 key={c.id}
                 clip={c}
-                onOpen={() => setOpen(c)}
+                onOpen={() => {
+                  // Through get_artifact, not the list row's copy:
+                  // opening is when external edits to the file mirror
+                  // get adopted (notes::sync_from_disk).
+                  ipc
+                    .getArtifact(c.id)
+                    .then((fresh) => {
+                      setOpen(fresh ?? c);
+                      refresh();
+                    })
+                    .catch(() => setOpen(c));
+                }}
                 onDelete={() => remove(c.id)}
               />
             ))}

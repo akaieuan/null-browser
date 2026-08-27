@@ -125,6 +125,8 @@ The article, as markdown.
 
 That file is the copy that matters. It's grep-able, it opens in Obsidian or any editor, and it's readable long after you've stopped running Null. Deleting a note in Null removes the SQLite row, and removes the file only if it still holds exactly what Null wrote — a file you've edited externally is kept, and a delete can never touch anything outside the notes directory.
 
+The sync runs both ways: edit a note's file in Obsidian or any editor, and the next time you open that note in Null, the file's title and body are adopted into the index. The parser is tolerant (extra front-matter keys are ignored, a `---` rule inside the body never truncates it, a file stripped of front matter is taken whole as the body), and a file that differs only in formatting changes nothing.
+
 Notes are listed newest-first with kind, host, and age, and the copy button sits visible on every row — **copy is the point**. One click puts the note on the clipboard as:
 
 ```
@@ -212,6 +214,7 @@ It currently has **no UI**. The search view was part of the AI drawer that was r
 | `⌃⌘⇧C` | Save the current selection to notes |
 | `⌘⇧W` | Close window |
 | `⌃⇥` / `⌃⇧⇥` | Next / previous tab |
+| `⌘1`–`⌘8` / `⌘9` | Jump to that tab / the last tab |
 | `Esc` | Close any open panel |
 
 ## Getting started
@@ -340,7 +343,6 @@ Invariant 3 now reads "no inference in the browser". Re-adding a model, local or
 - **M2 Phase 3** — subresource blocking via `WKContentRuleList` (native WebKit path — objc2 work) and `WKScriptMessageHandler` to close CSP blind spots
 - **Command bar** — `⌘L`/`⌘T` unified into a palette that also searches notes, bookmarks and history (`⌘K` stays unbound so sites keep theirs)
 - **Search UI** — put the SearXNG provider back in front of a user, or cut the backend
-- **Notes two-way sync** — re-read externally edited `.md` files on open (Null already refuses to delete them)
 - **Personal search** — FTS5 over history / bookmarks / notes so you can search what you've seen, not the whole web
 
 ### Not on the roadmap

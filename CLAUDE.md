@@ -16,7 +16,7 @@ Native page webviews are positioned from one function — `contentRect()` in `sr
 
 Shortcuts are native menu accelerators, defined once in `src-tauri/src/menu.rs` — never `keydown` listeners in React. This is not a style preference: the chrome and every page are separate webviews, so a listener in the chrome stops firing the moment focus enters a page, which is exactly how ⌘R/⌘[/⌘] came to be silently broken before. An accelerator reaches the app regardless of which webview holds focus.
 
-In progress: **M2 Phase 3** — native subresource blocking via `WKContentRuleList` + `WKScriptMessageHandler`. Not yet done from the sidebar spec: sidebar drag-resize, and ⌘1–9 tab switching (⌃⇥ / ⌃⇧⇥ do work). See `README.md` for the full milestone table.
+In progress: **M2 Phase 3** — native subresource blocking via `WKContentRuleList` + `WKScriptMessageHandler`. Not yet done from the sidebar spec: sidebar drag-resize (⌃⇥ / ⌃⇧⇥ and ⌘1–9 tab switching both work). See `README.md` for the full milestone table.
 
 Stack: Tauri 2.0 + Vite + React + TypeScript. Bundle identifier `sh.null.browser`, Cargo package `null`, lib `null_lib`. Build matrix targets macOS, Linux, Windows (macOS is the primary target today).
 
@@ -30,6 +30,7 @@ Stack: Tauri 2.0 + Vite + React + TypeScript. Bundle identifier `sh.null.browser
 | Build release bundles | `npm run tauri build` |
 | Build + install to /Applications | `npm run app:install` (removes the target/ bundle copy so Spotlight sees one Null.app) |
 | Rust type-check only | `cargo check --manifest-path src-tauri/Cargo.toml` |
+| Rust tests | `cargo test --manifest-path src-tauri/Cargo.toml` |
 | Rust lint (clippy) | `cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings` |
 | Frontend build | `npm run build` |
 | Frontend dev server only | `npm run dev` |
@@ -42,7 +43,7 @@ Rust toolchain: stable, installed via `rustup`. If `cargo` isn't on `PATH`, run 
 
 Dev signing (macOS): `npm run dev:setup` creates a self-signed `null-dev` code-signing cert in the login keychain. `tauri dev` then routes through `scripts/cargo-signed.sh`, which codesigns every dev build with a stable designated requirement, so macOS treats each rebuild as the same app. The wrapper falls through to plain cargo if no cert is present. No-op on Linux/Windows.
 
-There are no tests yet. When they land, update the table. Do not invent commands that don't exist yet — if asked to "run the tests", check the state of the code first.
+Tests: Rust unit tests exist (`notes.rs` round-trip parsing is the seed) and run in CI on all three platforms. There are no frontend tests yet. Do not invent commands that don't exist yet — if asked to "run the tests", check the state of the code first.
 
 ## The six invariants
 
