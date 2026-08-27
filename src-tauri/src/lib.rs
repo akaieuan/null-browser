@@ -221,6 +221,7 @@ pub fn run() {
             commands::tabs::activate_tabs,
             commands::tabs::set_tab_corner_radius,
             commands::tabs::set_tab_zoom,
+            commands::tabs::find_in_page,
             commands::tabs::open_tab_devtools,
             commands::tabs::close_tab,
             commands::tabs::activate_tab,

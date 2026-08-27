@@ -64,6 +64,18 @@ pub fn set_tab_zoom(app: AppHandle, id: String, factor: f64) -> Result<(), Strin
     webview::set_tab_zoom(&app, &id, factor)
 }
 
+/// ⌘F — find-on-page. An empty query clears the page's selection.
+#[tauri::command]
+pub fn find_in_page(
+    app: AppHandle,
+    id: String,
+    query: String,
+    forward: bool,
+    restart: bool,
+) -> Result<(), String> {
+    webview::find_in_page(&app, &id, &query, forward, restart)
+}
+
 /// Corners preference: restyle the native page cards.
 #[tauri::command]
 pub fn set_tab_corner_radius(app: AppHandle, radius: f64) {

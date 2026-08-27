@@ -604,6 +604,35 @@ pub fn set_tab_zoom(app: &AppHandle, tab_id: &str, factor: f64) -> Result<(), St
     webview.set_zoom(factor.clamp(0.25, 5.0)).map_err(s)
 }
 
+/// Find-on-page for one tab, driven from the chrome's find bar.
+///
+/// `window.find` is the one find API WebKit exposes to page script, and
+/// it is enough: it moves the page's own selection to the next match
+/// and scrolls it into view. Nothing in the DOM is modified and nothing
+/// persists — closing the bar clears the selection and that is the
+/// whole footprint. `restart` collapses the selection first so a new
+/// query searches from the top instead of continuing from wherever the
+/// last match left the caret. The query goes through
+/// `js_string_literal`, the same escaping the extraction scripts use.
+pub fn find_in_page(
+    app: &AppHandle,
+    tab_id: &str,
+    query: &str,
+    forward: bool,
+    restart: bool,
+) -> Result<(), String> {
+    if query.is_empty() {
+        return eval_on(app, tab_id, "window.getSelection().removeAllRanges()");
+    }
+    let script = format!(
+        "(function(){{if({restart}){{window.getSelection().removeAllRanges();}}window.find({q},false,{backwards},true,false,true,false);}})()",
+        restart = restart,
+        q = js_string_literal(query),
+        backwards = !forward,
+    );
+    eval_on(app, tab_id, &script)
+}
+
 /// Navigate a specific tab to a new URL.
 pub fn navigate_tab(app: &AppHandle, tab_id: &str, url: &str) -> Result<(), String> {
     let label = tab_label(tab_id);

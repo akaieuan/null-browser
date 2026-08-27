@@ -97,6 +97,10 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
             &PredefinedMenuItem::copy(app, None)?,
             &PredefinedMenuItem::paste(app, None)?,
             &PredefinedMenuItem::select_all(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &action(app, "find", "Find on Page…", Some("CmdOrCtrl+F"))?,
+            &action(app, "find_next", "Find Next", Some("CmdOrCtrl+G"))?,
+            &action(app, "find_prev", "Find Previous", Some("Shift+CmdOrCtrl+G"))?,
         ],
     )?;
 
@@ -240,7 +244,7 @@ pub fn handle_event<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
         // the first responder first, or the keystrokes land in the page
         // and the focus ring is painted on a field that never receives
         // them.
-        if matches!(action, "open_location" | "new_tab") {
+        if matches!(action, "open_location" | "new_tab" | "find") {
             let _ = crate::webview::focus_shell_any(app);
         }
         // emit_to the shell, never emit — an accelerator must not leak

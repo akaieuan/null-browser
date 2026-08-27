@@ -3,14 +3,17 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   ArrowLeftRight,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
+  ChevronUp,
   Columns2,
   NotebookText,
   PanelLeft,
   Plus,
   RotateCw,
   Star,
+  X,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -38,6 +41,7 @@ import {
 } from "@/lib/layout";
 import { CORNERS, usePreferences, resolveStartUrl } from "@/lib/preferences";
 import { isPaletteId, type Mode, type PaletteId, useTheme } from "@/lib/theme";
+import { loadSession, saveSession } from "@/lib/session";
 import { resolveQuery } from "@/lib/url";
 import { cn } from "@/lib/utils";
 
@@ -64,9 +68,23 @@ function blankTab(): Tab {
 }
 
 function App() {
+  // Last session's tabs come back as dormant rows — url and title but
+  // no webview yet. The one that was active materializes at boot (the
+  // effect below); the rest load on selection, so restoring twenty
+  // tabs never spawns twenty webviews.
+  const sessionSeed = useMemo(() => loadSession(), []);
   // `tabs` is never empty — a blank tab stands in for the zero-tab state,
   // which kills the `activeId: null` branch everywhere downstream.
-  const [tabs, setTabs] = useState<Tab[]>(() => [blankTab()]);
+  const [tabs, setTabs] = useState<Tab[]>(() =>
+    sessionSeed
+      ? sessionSeed.tabs.map((t) => ({
+          id: uuid(),
+          url: t.url,
+          title: t.title,
+          hasWebview: false,
+        }))
+      : [blankTab()],
+  );
   const [activeId, setActiveId] = useState<string>(() => "");
   const [input, setInput] = useState("");
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
@@ -247,10 +265,39 @@ function App() {
     bookmarksRef.current = bookmarks;
   }, [bookmarks]);
 
-  // Seed the active id once the first blank tab exists.
+  // Seed the active id once tabs exist — the restored session's active
+  // index if there is one, the first (blank) tab otherwise.
   useEffect(() => {
-    if (!activeId && tabs.length > 0) setActiveId(tabs[0].id);
-  }, [activeId, tabs]);
+    if (!activeId && tabs.length > 0) {
+      setActiveId((tabs[sessionSeed?.active ?? 0] ?? tabs[0]).id);
+    }
+  }, [activeId, tabs, sessionSeed]);
+
+  /** ⌘F find bar, in the toolbar (the one strip that is always chrome).
+      Only the query lives here — the match walking happens inside the
+      page via `window.find` (see `webview::find_in_page`). */
+  const [findOpen, setFindOpen] = useState(false);
+  const [findQuery, setFindQuery] = useState("");
+  const findInputRef = useRef<HTMLInputElement>(null);
+  const findOpenRef = useRef(false);
+  useEffect(() => {
+    findOpenRef.current = findOpen;
+  }, [findOpen]);
+  const closeFind = useCallback(() => {
+    setFindOpen(false);
+    setFindQuery("");
+    // Empty query clears the page's selection — the bar leaves nothing
+    // behind on the page it searched.
+    const id = activeIdRef.current;
+    if (id) ipc.findInPage(id, "", true, true).catch(() => {});
+  }, []);
+  // A find session belongs to one page; switching tabs ends it.
+  useEffect(() => {
+    if (findOpenRef.current) {
+      setFindOpen(false);
+      setFindQuery("");
+    }
+  }, [activeId]);
 
   const activeTab = tabs.find((t) => t.id === activeId) ?? tabs[0] ?? null;
   const hasActiveWebview = activeTab?.hasWebview ?? false;
@@ -290,6 +337,47 @@ function App() {
       }),
     [sidebarWidth, effectiveSidebarOpen, notesWidth],
   );
+
+  /** Give a dormant (session-restored) tab its webview and show it. */
+  const materializeTab = useCallback(
+    async (id: string, url: string) => {
+      await ipc.openTab(id, url, rectNow());
+      await ipc.activateTab(id);
+      setTabs((prev) =>
+        prev.map((t) => (t.id === id ? { ...t, hasWebview: true } : t)),
+      );
+    },
+    [rectNow],
+  );
+  const materializeTabRef = useRef(materializeTab);
+  materializeTabRef.current = materializeTab;
+
+  // One-shot at boot: wake the restored active tab. Everything else
+  // stays dormant until selected.
+  const bootRestoredRef = useRef(false);
+  useEffect(() => {
+    if (bootRestoredRef.current || !activeId) return;
+    bootRestoredRef.current = true;
+    const t = tabsRef.current.find((x) => x.id === activeId);
+    if (t && !t.hasWebview && t.url !== BLANK_URL) {
+      materializeTabRef.current(t.id, t.url).catch(() => {});
+      setInput(t.url);
+    }
+  }, [activeId]);
+
+  // Persist the session, debounced: real (web) tabs only, plus which
+  // one was active. See src/lib/session.ts for what this stores.
+  useEffect(() => {
+    const h = window.setTimeout(() => {
+      const real = tabs.filter((t) => /^https?:\/\//.test(t.url));
+      const activeIdx = real.findIndex((t) => t.id === activeId);
+      saveSession(
+        real.map((t) => ({ url: t.url, title: t.title })),
+        activeIdx < 0 ? 0 : activeIdx,
+      );
+    }, 300);
+    return () => window.clearTimeout(h);
+  }, [tabs, activeId]);
 
   // Window-drag. The attribute alone is flaky across Tauri/WebView
   // versions; calling startDragging() is reliable. Opt out when the
@@ -613,11 +701,12 @@ function App() {
       if (!tab) return;
       setSelection({ kind: "tab" });
       if (tab.hasWebview) await ipc.activateTab(id);
+      else if (tab.url !== BLANK_URL) await materializeTab(tab.id, tab.url);
       else await ipc.hideAllTabs();
       setActiveId(id);
       setInput(tab.url !== BLANK_URL ? tab.url : "");
     },
-    [tabs],
+    [tabs, materializeTab],
   );
 
   const closeTabById = useCallback(
@@ -660,7 +749,15 @@ function App() {
         setInput(next.url !== BLANK_URL ? next.url : "");
         // Don't yank a panel out from under the user just because a
         // background tab closed.
-        if (selectionRef.current.kind !== "tab" || !next.hasWebview) {
+        if (
+          selectionRef.current.kind === "tab" &&
+          !next.hasWebview &&
+          next.url !== BLANK_URL
+        ) {
+          // The neighbour is a dormant restored tab: wake it rather
+          // than showing Home behind a row that names a real site.
+          await materializeTabRef.current(next.id, next.url).catch(() => {});
+        } else if (selectionRef.current.kind !== "tab" || !next.hasWebview) {
           await ipc.hideAllTabs().catch(() => {});
           if (!next.hasWebview) inputRef.current?.focus();
         } else {
@@ -836,6 +933,27 @@ function App() {
           setSelection({ kind: "tab" });
           inputRef.current?.focus();
           inputRef.current?.select();
+          break;
+        case "find": {
+          // Only when the page is actually showing — a find bar over a
+          // panel would search something the user cannot see.
+          if (selectionRef.current.kind !== "tab") break;
+          const t = tabsRef.current.find((x) => x.id === activeIdRef.current);
+          if (!t?.hasWebview) break;
+          setFindOpen(true);
+          window.setTimeout(() => {
+            findInputRef.current?.focus();
+            findInputRef.current?.select();
+          }, 0);
+          break;
+        }
+        case "find_next":
+        case "find_prev":
+          if (findOpen && findQuery && hasActiveWebview) {
+            ipc
+              .findInPage(activeId, findQuery, action === "find_next", false)
+              .catch(() => {});
+          }
           break;
         case "reload":
           if (hasActiveWebview) ipc.reload(activeId).catch(() => {});
@@ -1213,6 +1331,87 @@ function App() {
           </form>
 
           <div className="flex shrink-0 items-center gap-0.5">
+            {/* Find bar. Same reasoning as the download chip: the
+                toolbar is the only strip the native page can never
+                paint over, and the chrome's height never changes, so
+                opening it reflows nothing. */}
+            {findOpen && (
+              <div
+                data-tauri-drag-region="false"
+                className="flex h-[26px] shrink-0 items-center rounded-md border border-transparent bg-accent/50 pl-2 transition-colors focus-within:border-[color-mix(in_srgb,var(--select)_50%,transparent)] focus-within:bg-accent"
+              >
+                <input
+                  ref={findInputRef}
+                  type="text"
+                  value={findQuery}
+                  onChange={(e) => {
+                    const q = e.target.value;
+                    setFindQuery(q);
+                    if (hasActiveWebview) {
+                      ipc.findInPage(activeId, q, true, true).catch(() => {});
+                    }
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      if (findQuery && hasActiveWebview) {
+                        ipc
+                          .findInPage(activeId, findQuery, !e.shiftKey, false)
+                          .catch(() => {});
+                      }
+                    } else if (e.key === "Escape") {
+                      e.preventDefault();
+                      closeFind();
+                    }
+                  }}
+                  placeholder="Find on page"
+                  spellCheck={false}
+                  autoCapitalize="off"
+                  autoCorrect="off"
+                  aria-label="Find on page"
+                  className="w-36 bg-transparent font-mono text-[12px] text-foreground placeholder:text-muted-foreground focus:outline-none"
+                />
+                <button
+                  type="button"
+                  aria-label="Previous match"
+                  title="Previous match · ⇧⌘G"
+                  onClick={() => {
+                    if (findQuery && hasActiveWebview) {
+                      ipc
+                        .findInPage(activeId, findQuery, false, false)
+                        .catch(() => {});
+                    }
+                  }}
+                  className="rounded-sm p-1 text-muted-foreground transition-colors hover:text-foreground"
+                >
+                  <ChevronUp size={13} strokeWidth={1.5} />
+                </button>
+                <button
+                  type="button"
+                  aria-label="Next match"
+                  title="Next match · ⌘G"
+                  onClick={() => {
+                    if (findQuery && hasActiveWebview) {
+                      ipc
+                        .findInPage(activeId, findQuery, true, false)
+                        .catch(() => {});
+                    }
+                  }}
+                  className="rounded-sm p-1 text-muted-foreground transition-colors hover:text-foreground"
+                >
+                  <ChevronDown size={13} strokeWidth={1.5} />
+                </button>
+                <button
+                  type="button"
+                  aria-label="Close find bar"
+                  title="Close · Esc"
+                  onClick={closeFind}
+                  className="mr-0.5 rounded-sm p-1 text-muted-foreground transition-colors hover:text-foreground"
+                >
+                  <X size={13} strokeWidth={1.5} />
+                </button>
+              </div>
+            )}
             {/* Download status. It lives in the toolbar because the
                 toolbar is the one strip that is always chrome — a
                 floating toast would vanish under the native page. */}

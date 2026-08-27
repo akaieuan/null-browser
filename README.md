@@ -139,13 +139,18 @@ Paste that wherever you want it. Null has no opinion about what reads it next.
 
 No AI call, no provider, no key, no network traffic beyond the page you already loaded. Extraction runs inside the tab's own WebView using vendored Readability + Turndown, and the result comes back to Rust through the `null-event://` custom scheme as chunked `Image.src` beacons — not `fetch`, because `img-src` is broad where `connect-src` is locked down on exactly the sites worth clipping (Medium, news, docs). Extraction times out after 10 seconds.
 
-### Popups, downloads, zoom
+### Popups, downloads, zoom, find
 
 - `window.open` with dimensions (OAuth dialogs, captcha frames) opens a real popup window built on the exact WebKit configuration the page requested — which is what keeps `window.opener` and `postMessage` working, so challenge flows can complete. Popups are tab-class, never shell-class: web URLs only, no IPC.
 - Plain `target="_blank"` opens a normal tab.
 - Downloads land in `~/Downloads` under a collision-free name, with page-supplied filenames sanitized first; a quiet chip in the toolbar reports progress and completion.
 - `⌘+` / `⌘−` / `⌘0` zoom the page per-tab, 50–300%.
+- `⌘F` opens a find bar in the toolbar (`⌘G` / `⇧⌘G` walk matches, Esc closes). The matching runs inside the page via WebKit's own `window.find` — nothing in the DOM is modified, and closing the bar clears the selection it moved. The bar lives in the toolbar because that is the one strip a page can never paint over, and opening it reflows nothing.
 - `⌥⌘I` (or right-click → Inspect Element) opens WebKit's own Web Inspector on any tab.
+
+### Session restore
+
+Quitting doesn't cost you your working set: the open tabs (URL, title, which one was active) are saved locally as they change, and the next launch brings the list back. Restored tabs come back *dormant* — rows in the sidebar, no webview — and load when you select them, so restoring twenty tabs costs nothing until they're wanted. Only the tab that was active loads at launch. Stored in the shell's `localStorage` alongside the other preferences; one session deep, every save overwrites the last, nothing leaves the machine.
 
 ### Web search (backend only)
 
@@ -198,6 +203,7 @@ It currently has **no UI**. The search view was part of the AI drawer that was r
 | `⌘⇧I` | Toggle Network Inspector |
 | `⌘/` | Toggle Notes |
 | `⌘N` | New note (linked to the current page) |
+| `⌘F` | Find on page (`⌘G` next, `⇧⌘G` previous, Esc closes) |
 | `⌥⌘S` | Split view with the next tab |
 | `⌥⌘I` | Web Inspector on the active tab |
 | `⌘+` / `⌘−` / `⌘0` | Zoom in / out / reset |
@@ -334,8 +340,6 @@ Invariant 3 now reads "no inference in the browser". Re-adding a model, local or
 - **M2 Phase 3** — subresource blocking via `WKContentRuleList` (native WebKit path — objc2 work) and `WKScriptMessageHandler` to close CSP blind spots
 - **Command bar** — `⌘L`/`⌘T` unified into a palette that also searches notes, bookmarks and history (`⌘K` stays unbound so sites keep theirs)
 - **Search UI** — put the SearXNG provider back in front of a user, or cut the backend
-- **Tab persistence** — restore open tabs on relaunch via SQLite
-- **Find in page** — `⌘F`
 - **Notes two-way sync** — re-read externally edited `.md` files on open (Null already refuses to delete them)
 - **Personal search** — FTS5 over history / bookmarks / notes so you can search what you've seen, not the whole web
 

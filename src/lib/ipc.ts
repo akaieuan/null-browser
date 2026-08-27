@@ -108,6 +108,8 @@ export const ipc = {
   listBookmarks: () => invoke<Bookmark[]>("list_bookmarks"),
   addBookmark: (url: string, title: string) =>
     invoke<Bookmark>("add_bookmark", { url, title }),
+  findInPage: (id: string, query: string, forward: boolean, restart: boolean) =>
+    invoke<void>("find_in_page", { id, query, forward, restart }),
   removeBookmark: (id: number) => invoke<void>("remove_bookmark", { id }),
   updateBookmark: (id: number, url: string, title: string) =>
     invoke<void>("update_bookmark", { id, url, title }),
