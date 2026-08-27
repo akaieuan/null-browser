@@ -386,9 +386,17 @@ mod mac {
     /// page means the next navigation. Nothing reloads on its own —
     /// throwing away a page the user is reading is not a privacy win.
     pub fn recompile_user_rules(app: &AppHandle) {
-        // A failed read keeps the last compiled list. Treating it as
-        // "zero origins" would silently drop native enforcement for
-        // every shielded origin while SQLite still shows them blocked.
+        // Snapshot and ticket are taken together under one lock. The
+        // fetch_add alone is not enough: commands run on tauri's async
+        // runtime, so a thread that read a stale snapshot could still
+        // win the higher generation and install an under-blocking list.
+        // Serializing read-then-number means the highest generation
+        // provably read last, so it reflects the latest committed
+        // state. A failed read keeps the last compiled list — treating
+        // it as "zero origins" would drop native enforcement for every
+        // shielded origin while SQLite still shows them blocked.
+        static SNAPSHOT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = SNAPSHOT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let origins = match app.try_state::<Storage>().map(|s| s.list_blocked_origins()) {
             Some(Ok(rows)) => rows.into_iter().map(|r| r.origin).collect::<Vec<_>>(),
             _ => {
@@ -396,9 +404,8 @@ mod mac {
                 return;
             }
         };
-        // The ticket is taken at read time: the highest generation is
-        // the latest read, which saw every write before it.
         let generation = USER_GEN.fetch_add(1, Ordering::SeqCst) + 1;
+        drop(_guard);
         let json = super::user_rules_json(&origins);
         let handle = app.clone();
         let _ = app.run_on_main_thread(move || {
