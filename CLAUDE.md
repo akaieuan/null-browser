@@ -16,7 +16,9 @@ Native page webviews are positioned from one function — `contentRect()` in `sr
 
 Shortcuts are native menu accelerators, defined once in `src-tauri/src/menu.rs` — never `keydown` listeners in React. This is not a style preference: the chrome and every page are separate webviews, so a listener in the chrome stops firing the moment focus enters a page, which is exactly how ⌘R/⌘[/⌘] came to be silently broken before. An accelerator reaches the app regardless of which webview holds focus.
 
-In progress: **M2 Phase 3** — native subresource blocking via `WKContentRuleList` + `WKScriptMessageHandler`. Not yet done from the sidebar spec: sidebar drag-resize (⌃⇥ / ⌃⇧⇥ and ⌘1–9 tab switching both work). See `README.md` for the full milestone table.
+In progress: **M2 Phase 3**, half landed. `WKContentRuleList` blocking ships (`src-tauri/src/blocklist/`): user-shielded origins are refused for every resource type including `document` — which closes the popup route — and Null's own bundled ad/tracker list rides the same machinery, **off by default** behind `set_ad_blocking`. The list is `scripts/blocklist/null-list.txt`, hand-written here and compiled to `src-tauri/src/blocklist/ads.json` by `node scripts/blocklist/generate.mjs`; that JSON is committed and `include_str!`d, so nothing fetches a list — updating it is a commit (invariant 2, decision recorded in `docs/PHILOSOPHY.md`). Never vendor EasyList or any other filter project into it. Still open: the `WKScriptMessageHandler` half, which would close the inspector's CSP blind spots. Not yet done from the sidebar spec: sidebar drag-resize (⌃⇥ / ⌃⇧⇥ and ⌘1–9 tab switching both work). See `README.md` for the full milestone table.
+
+Everything in `blocklist/mod.rs` that touches `WKContentRuleList` runs on the main thread — `Retained` is not `Send` and the compiled lists live in a `thread_local!`. Native entry points either start on the main thread (`init`, from `setup`) or hop there with `run_on_main_thread` first.
 
 Stack: Tauri 2.0 + Vite + React + TypeScript. Bundle identifier `sh.null.browser`, Cargo package `null`, lib `null_lib`. Build matrix targets macOS, Linux, Windows (macOS is the primary target today).
 
@@ -36,6 +38,7 @@ Stack: Tauri 2.0 + Vite + React + TypeScript. Bundle identifier `sh.null.browser
 | Frontend dev server only | `npm run dev` |
 | Re-capture `docs/screenshots/` | `npm run ui:shoot` (needs `npm run dev` running) |
 | Audit palette contrast | `npm run ui:tokens` (`-- --write` to solve and rewrite) |
+| Regenerate the blocklist after editing `null-list.txt` | `node scripts/blocklist/generate.mjs` (commit `ads.json` with it) |
 
 Rust toolchain: stable, installed via `rustup`. If `cargo` isn't on `PATH`, run `source ~/.cargo/env` first.
 

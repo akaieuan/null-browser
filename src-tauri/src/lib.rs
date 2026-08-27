@@ -1,5 +1,6 @@
 use tauri::{http, Manager, Url};
 
+pub mod blocklist;
 pub mod commands;
 pub mod dock;
 pub mod favicons;
@@ -206,6 +207,9 @@ pub fn run() {
             notes::backfill(&storage);
             notes::dedupe(&storage);
             app.manage(storage);
+            // After `manage`: init reads the ad-blocking toggle and the
+            // blocked origins out of the same Storage.
+            blocklist::init(app.handle());
             app.manage(network::NetworkState::default());
             app.manage(webview::extract::ExtractRegistry::default());
             let menu = menu::build(app.handle())?;
@@ -250,6 +254,8 @@ pub fn run() {
             commands::network::block_origin,
             commands::network::unblock_origin,
             commands::network::list_blocked_origins,
+            commands::network::ad_blocking_enabled,
+            commands::network::set_ad_blocking,
             commands::artifacts::list_artifacts,
             commands::artifacts::get_artifact,
             commands::artifacts::delete_artifact,

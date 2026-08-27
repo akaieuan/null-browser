@@ -28,7 +28,7 @@ This is a personal open-source project. There is no business model. There will n
 
 Every existing browser that calls itself "privacy-focused" still ships its own telemetry, sells a sync subscription, or bolts privacy features onto a business model that depends on my data being legible somewhere else. I wanted a browser that actually let me **reduce, control, and understand my data footprint** — without having to audit the browser itself to find out.
 
-- **Reduce** — the Network Inspector shows every outbound request in real time, grouped by origin. One click on the shield and future requests to that origin are cancelled. You stop hoping the browser isn't talking behind your back and start watching.
+- **Reduce** — the Network Inspector shows every outbound request in real time, grouped by origin. One click on the shield and WebKit refuses every future request to that origin — scripts and pixels, not just navigations — before anything leaves the machine. There is also a bundled ad and tracker list, written in this repo rather than subscribed to, off until you switch it on. You stop hoping the browser isn't talking behind your back and start watching.
 - **Control** — Notes capture a page or a selection as markdown, locally, with no network call of their own. Copy the result into whatever tool you actually want to use. The browser never decides which service gets your reading.
 - **Understand** — every piece of state lives in a local SQLite file, a markdown file in your documents folder, or localStorage. Bookmarks, history, blocked origins, clips, settings — all inspectable with `sqlite3`, `grep`, or any text editor. Nothing is a remote service you can't open and read.
 
@@ -98,6 +98,18 @@ Every keyboard shortcut is a native menu accelerator rather than a listener in t
 - **Click the shield icon on any origin to block it.** Future navigations to that origin are cancelled at the webview layer. Subresources to blocked origins still log (marked blocked) so you can see what was refused
 - Pause / resume recording, clear all
 - Ring buffer capped at 2k events, never persisted (privacy). The blocklist itself does persist, in SQLite
+
+### Blocking
+
+Shielding an origin used to cancel its navigations and nothing else — a subresource from a blocked origin still loaded, and the inspector could only tell you so. It is now a `WKContentRuleList` compiled from SQLite and handed to every tab and popup, so WebKit refuses the request itself: scripts, pixels, fonts, media, and the popup route that `on_navigation` never saw. A blocked request does not leave the machine at all.
+
+The same machinery carries **Null's own ad and tracker list** — around 180 hostnames covering ad exchanges, audience measurement, session recording, data brokers, mobile attribution and social pixels.
+
+The list is written in this repository, by hand. Nothing in it is imported from EasyList, uBlock Origin, AdGuard, or any other filter project, and it is compiled into the binary rather than downloaded. That is invariant 2 doing its job: every shipping blocklist is a subscription the browser fetches from a server you did not choose, usually carrying an identifier so the operator can count you. Growing Null's list is a commit and shipping it is a build. Slower and smaller than a subscription, and honest about what it is. Provenance and the bar for an entry are in [`scripts/blocklist/README.md`](scripts/blocklist/README.md).
+
+**It ships off.** Settings → Privacy → Blocking turns it on. Blocking changes what a page receives, and a browser that quietly rewrites pages on first launch has made a decision that wasn't its to make. The toggle takes effect on the next navigation — nothing reloads out from under you.
+
+One caveat worth setting expectations on: this does not clear YouTube's ads. YouTube serves them from the same hosts as the video itself, and no hostname list can separate the two. What it does remove is the tracking and the display advertising on the rest of the web.
 
 ### Notes
 
@@ -176,13 +188,13 @@ It currently has **no UI**. The search view was part of the AI drawer that was r
 ### Settings panel
 - Left-aligned, typography-first — separation is tone and space, no hairline dividers
 - **Appearance** — theme + mode, plus Corners (one knob drives the CSS radius scale *and* the native page-card corner radius), Glass strength (Clear / Frosted / Solid), and the sidebar hover-reveal toggle
-- **Privacy** — read-only status rows reflecting the invariants ("Telemetry: off", "Cloud connections: none", "All data: local")
+- **Privacy** — read-only status rows reflecting the invariants ("Telemetry: off", "Cloud connections: none", "All data: local"), plus **Blocking**: the one switch for Null's bundled ad and tracker list, off by default
 - **Notes** — where clips are written, the file format, and a row that reads "Inference: never"
 - **About** — app version and repo link
 
 ### Under the hood
 - Tauri 2 with the `unstable` feature for multi-webview support
-- Rust backend: `tokio`, `rusqlite` (bundled SQLite — no system dep), `reqwest` (rustls, no system OpenSSL), `directories` (data + documents paths), `uuid`, `objc2` + `objc2-app-kit` for macOS-specific tweaks like the dock icon
+- Rust backend: `tokio`, `rusqlite` (bundled SQLite — no system dep), `reqwest` (rustls, no system OpenSSL), `directories` (data + documents paths), `uuid`, `objc2` + `objc2-app-kit` for macOS-specific tweaks like the dock icon, `objc2-web-kit` + `block2` for the native content-rule-list blocking path
 - Frontend: React 19 + TypeScript + Vite + Tailwind v4 + shadcn primitives + lucide-react icons + dnd-kit for bookmark reordering + react-markdown / remark-gfm for clip rendering
 - A strict CSP on the shell webview: `default-src 'self'`, `script-src 'self'`, `object-src 'none'`, no remote origins
 - A `navigation-guard` plugin pins the privileged `main` webview to its own origin. Remote links surfaced inside the shell (a clip's source URL, for instance) can only ever open in a tab webview, never navigate the shell itself
@@ -294,6 +306,7 @@ null-browser/
 │       │   └── vendor/           — Readability + Turndown, embedded via include_str!
 │       ├── notes.rs              — markdown mirror in ~/Documents/Null/
 │       ├── network/              — inspector state, navigation + subresource capture, per-origin blocking
+│       ├── blocklist/            — WKContentRuleList compilation + ads.json (generated, committed, never fetched)
 │       ├── storage/              — SQLite schema (migrations 001–006) + CRUD for bookmarks / history / blocked origins / clips / settings
 │       ├── commands/             — one file per IPC domain (tabs, bookmarks, history, network, meta, artifacts, search)
 │       ├── search/               — web search providers (SearXNG; no UI today)
@@ -308,6 +321,7 @@ null-browser/
 │   └── screenshots/
 │
 ├── scripts/ui/                   — headless-Chrome capture + palette contrast audit
+├── scripts/blocklist/            — null-list.txt (the list itself) + the generator that compiles it to JSON
 │
 ├── CONTRIBUTING.md               — the three-question PR rule, voice guide, dep audit
 ├── CLAUDE.md                     — project context for Claude Code
@@ -340,7 +354,8 @@ The AI layer was built and then taken back out. Keeping the history honest rathe
 Invariant 3 now reads "no inference in the browser". Re-adding a model, local or remote, would need an explicit decision recorded in [docs/PHILOSOPHY.md](docs/PHILOSOPHY.md) first.
 
 ### In progress / next
-- **M2 Phase 3** — subresource blocking via `WKContentRuleList` (native WebKit path — objc2 work) and `WKScriptMessageHandler` to close CSP blind spots
+- **M2 Phase 3** — half done. The `WKContentRuleList` half has landed: native subresource and popup blocking for user-shielded origins, plus Null's own bundled ad and tracker list behind a default-off switch. The `WKScriptMessageHandler` half is still open — the subresource *observer* is an injected script, so sites with a strict `img-src` CSP stay invisible to the inspector even though blocking now works on them
+- **Per-site allowlist** — `unless-domain` on the bundled rules, so one site can be exempted without turning the whole list off. The fast-follow to the switch that just shipped
 - **Command bar** — `⌘L`/`⌘T` unified into a palette that also searches notes, bookmarks and history (`⌘K` stays unbound so sites keep theirs)
 - **Search UI** — put the SearXNG provider back in front of a user, or cut the backend
 - **Personal search** — FTS5 over history / bookmarks / notes so you can search what you've seen, not the whole web

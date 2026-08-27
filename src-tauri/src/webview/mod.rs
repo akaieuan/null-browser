@@ -357,7 +357,13 @@ pub fn create_tab(
                 b = b.with_webview_configuration(config);
             }
             match b.build() {
-                Ok(window) => NewWindowResponse::Create { window },
+                Ok(window) => {
+                    // A popup gets its own WKUserContentController, so
+                    // it needs the rule lists handed to it separately —
+                    // it inherits nothing from the tab that opened it.
+                    crate::blocklist::attach_window(&window);
+                    NewWindowResponse::Create { window }
+                }
                 Err(_) => NewWindowResponse::Deny,
             }
         })
@@ -431,6 +437,10 @@ pub fn create_tab(
         .map_err(s)?;
 
     round_corners(&webview);
+    // Before the first request goes out: a webview built without its
+    // rule lists would load a page's trackers once and only start
+    // blocking on the navigation after.
+    crate::blocklist::attach(&webview);
 
     Ok(())
 }

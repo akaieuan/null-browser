@@ -1,0 +1,219 @@
+# Null's blocklist — SPDX-License-Identifier: MPL-2.0
+#
+# One hostname per line. Blank lines and `#` comments are ignored.
+# `generate.mjs` turns this file into src-tauri/src/blocklist/ads.json,
+# which is compiled into a WKContentRuleList at launch.
+#
+# This list is written here, by hand. Nothing in it is imported from
+# EasyList, uBlock Origin, Peter Lowe, or any other filter project.
+# Growing it is a commit, never a fetch (invariant 2).
+#
+# The bar for an entry: the hostname exists to serve advertising, to
+# measure a person across sites, or to sell an audience segment. A
+# hostname that also carries pages a user reads, or a login a user
+# needs, does not go in — a dashboard behind an ad company's domain is
+# still a dashboard, and breaking it is not blocking an ad. When only
+# a company's collector subdomain qualifies, the entry names that
+# subdomain rather than the registrable domain.
+#
+# Each entry matches the hostname and every subdomain of it.
+
+# --- Google advertising and measurement ---
+doubleclick.net
+googlesyndication.com
+googleadservices.com
+googletagmanager.com
+googletagservices.com
+google-analytics.com
+adservice.google.com
+adtrafficquality.google
+app-measurement.com
+ad-delivery.net
+imasdk.googleapis.com
+2mdn.net
+
+# --- Audience measurement and panels ---
+scorecardresearch.com
+comscore.com
+quantserve.com
+quantcount.com
+chartbeat.com
+chartbeat.net
+parsely.com
+effectivemeasure.net
+cxense.com
+
+# --- Exchanges, SSPs, DSPs ---
+adnxs.com
+adnxs-simple.com
+rubiconproject.com
+pubmatic.com
+openx.net
+casalemedia.com
+33across.com
+smartadserver.com
+adform.net
+yieldmo.com
+sovrn.com
+lijit.com
+indexww.com
+gumgum.com
+spotxchange.com
+spotx.tv
+springserve.com
+tremorhub.com
+teads.tv
+media.net
+bidswitch.net
+adsrvr.org
+mathtag.com
+rlcdn.com
+tapad.com
+ml314.com
+exelator.com
+eyeota.net
+adition.com
+yieldlab.net
+adscale.de
+3lift.com
+districtm.io
+sharethrough.com
+pubnative.net
+smaato.net
+bidr.io
+lkqd.net
+contextweb.com
+360yield.com
+emxdgt.com
+sonobi.com
+adtelligent.com
+betweendigital.com
+richaudience.com
+onetag-sys.com
+vidoomy.com
+omnitagjs.com
+adkernel.com
+loopme.me
+smartyads.com
+adyoulike.com
+connatix.com
+rtbhouse.com
+adpushup.com
+serverbid.com
+adsymptotic.com
+1rx.io
+w55c.net
+rfihub.com
+simpli.fi
+turn.com
+zedo.com
+adroll.com
+adrta.com
+yieldmanager.com
+advertising.com
+adtechus.com
+amazon-adsystem.com
+criteo.com
+criteo.net
+dotomi.com
+conversantmedia.com
+flashtalking.com
+serving-sys.com
+sizmek.com
+adriver.ru
+adhigh.net
+gscontxt.net
+clickagy.com
+semasio.net
+weborama.fr
+ipredictive.com
+bidtellect.com
+adcolony.com
+applvn.com
+
+# --- Content recommendation widgets sold as ad units ---
+taboola.com
+outbrain.com
+outbrainimg.com
+zemanta.com
+revcontent.com
+mgid.com
+postrelease.com
+
+# --- Viewability and ad verification ---
+moatads.com
+doubleverify.com
+adsafeprotected.com
+iasds01.com
+
+# --- Data management platforms and identity graphs ---
+bluekai.com
+krxd.net
+demdex.net
+omtrdc.net
+2o7.net
+everesttech.net
+adobedtm.com
+agkn.com
+crwdcntrl.net
+pippio.com
+liadm.com
+id5-sync.com
+addthis.com
+sharethis.com
+
+# --- Session recording and behavioural analytics ---
+hotjar.com
+hotjar.io
+mouseflow.com
+crazyegg.com
+fullstory.com
+inspectlet.com
+luckyorange.com
+smartlook.com
+clarity.ms
+heapanalytics.com
+kissmetrics.com
+histats.com
+mxpnl.com
+segment.io
+cdn.segment.com
+api.amplitude.com
+cdn.amplitude.com
+c.statcounter.com
+cdn.optimizely.com
+logx.optimizely.com
+visualwebsiteoptimizer.com
+cloudflareinsights.com
+
+# --- Mobile and cross-device attribution ---
+branch.io
+adjust.com
+appsflyer.com
+kochava.com
+singular.net
+inmobi.com
+
+# --- Social platform pixels ---
+facebook.net
+ads-twitter.com
+analytics.twitter.com
+ads.linkedin.com
+snap.licdn.com
+analytics.tiktok.com
+ads.tiktok.com
+ads.pinterest.com
+ct.pinterest.com
+bat.bing.com
+ads.yahoo.com
+analytics.yahoo.com
+mc.yandex.ru
+an.yandex.ru
+
+# --- Marketing automation trackers ---
+marketo.net
+hs-scripts.com
+hs-analytics.net
+hsadspixel.net
+sail-horizon.com
+disqusads.com

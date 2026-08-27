@@ -55,6 +55,26 @@ Any pull request that touches networking or storage has to answer three question
 
 ---
 
+## Decisions on the record
+
+### Blocking (2026-08-27)
+
+Null blocks ads and trackers from a static list that is written in this repository, by hand, and compiled into the binary. Nothing in it is imported from EasyList, uBlock Origin, AdGuard, or any other filter project.
+
+The reason is invariant 2, and it is not a close call. Every shipping blocklist is a subscription: the browser fetches it on a schedule, from a server the user did not choose, and that fetch is a connection to a third party on every launch. It usually carries an install identifier so the operator can count users. Adopting one would mean either breaking the invariant or shipping a list that goes stale — and a browser that phones home for its blocklist is exactly the shape of thing this project exists to not be.
+
+So the list is code. Adding a hostname is a commit; getting a bigger list is updating the app. That is slower and smaller than a subscription, and it is honest about what it is: an opinion the maintainer holds, versioned, readable, and reviewable in the same diff as everything else. The provenance rules live in `scripts/blocklist/README.md`.
+
+It is **off by default**. Blocking changes what a page receives, and a browser that silently rewrites pages on first launch has made a decision that was not its to make. The Network Inspector shows what a page loads; the toggle in Settings is where a user decides to do something about it.
+
+### Invariant 4 and a blocked request
+
+A blocked request is not an invisible outbound connection. It is not an outbound connection at all — WebKit refuses it before anything is written to a socket, so no packet, no DNS lookup, and no TLS handshake leaves the machine.
+
+Invariant 4 says every outbound connection is visible through the Network Inspector. That still holds exactly: the inspector shows what loaded, and blocking removes things from that list rather than hiding them from it. Main-frame navigations are kept off the bundled rule list for the same reason — they stay on the path where they are recorded, so a refused navigation is something the user can see was refused.
+
+---
+
 ## How to use this document
 
 When a feature is proposed — by a contributor, by an issue, by the maintainer's own enthusiasm — read this document and ask whether the feature would sit comfortably alongside it. If it would not, the feature does not belong in Null, no matter how clever or useful it is in isolation.

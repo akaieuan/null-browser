@@ -29,6 +29,10 @@ navigated by a page, and a page must never reach a command.
 | Popup windows (`window.open`) are tab-class, never shell-class: `popup-*` labels get http/https/about only from the navigation guard, and no capability grants IPC to them | guard in `src-tauri/src/lib.rs`; `on_new_window` in `webview/mod.rs` |
 | Download filenames are page-controlled input: sanitized (no separators or control chars, length-capped), written only under `~/Downloads`, collision-suffixed | `sanitize_filename` / `unique_download_path`, `webview/mod.rs` |
 | Markdown links open in a tab, never in the shell | `markdownComponentsFor`, `src/components/panels/NotesPanel.tsx` |
+| Blocking runs inside WebKit, before a request is issued — a page cannot script around it the way it can around an injected script | `WKContentRuleList` compiled in `src-tauri/src/blocklist/mod.rs`, attached in `create_tab` |
+| Popups carry the same rule lists as tabs | `blocklist::attach_window` in the `on_new_window` popup arm, `webview/mod.rs` |
+| User-blocked origins are blocked for every resource type including `document`, which covers the popup route `on_navigation` never saw | `origin_rule` omits `resource-type`, `src-tauri/src/blocklist/mod.rs` |
+| The blocklist is compiled in, never fetched | `include_str!("ads.json")`; generated offline by `scripts/blocklist/generate.mjs` |
 
 ### `macOSPrivateApi` (2026-08-26)
 
@@ -81,6 +85,25 @@ capability it did not already have. It has two routes:
   authenticating a chunk — there is no check of which tab sent it — so
   if that scoping is ever weakened, or the channel grows a second
   caller, this needs revisiting.
+
+### Content rule lists fail open (2026-08-27)
+
+Both rule lists — the bundled ad list and the user's blocked origins —
+are compiled asynchronously by WebKit. If a compile fails, the slot
+stays empty, the failure goes to stderr as `null-blocklist: …`, and
+browsing continues unblocked.
+
+That is the right way round for the ad list, which is a preference. It
+is worth knowing for the user's own blocked origins, which read like a
+guarantee: **the rule list is the second layer, not the only one.** The
+first is `network::record_navigation`, which cancels a navigation to a
+blocked origin whether or not anything compiled. A compile failure
+costs the subresource and popup coverage, not the navigation block.
+
+The lists are also attached per webview, at creation. A tab or popup
+built before the first compile lands gets them applied when the
+completion handler runs, which is why `apply_to_all` sweeps every live
+`tab-*` and `popup-*` rather than only the new one.
 
 ## Known open surface
 
