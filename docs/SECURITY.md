@@ -105,6 +105,15 @@ built before the first compile lands gets them applied when the
 completion handler runs, which is why `apply_to_all` sweeps every live
 `tab-*` and `popup-*` rather than only the new one.
 
+One scope asymmetry is deliberate and worth stating: the navigation
+layer blocks the *exact* origin string, while the compiled rule blocks
+the host's whole subdomain subtree on both schemes — ad hosts rotate
+subdomains, and a shield that only matched the one already seen would
+not hold. The widening never applies to a single-label host: blocking
+`https://com` (a garbage request a page can bait into the Inspector)
+compiles to exactly that host, because the wildcard form would match
+every `.com` site's subresources (`blocklist::origin_rule`, tested).
+
 ## Known open surface
 
 `commands::search::*` (SearXNG) is registered and makes outbound HTTP,

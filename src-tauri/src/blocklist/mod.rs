@@ -56,7 +56,17 @@ fn origin_rule(origin: &str) -> Option<Value> {
         // there to match.
         None => "[:/]".to_string(),
     };
-    let filter = format!("^https?://([a-z0-9_-]+\\.)*{}{}", escape_regex(host), tail);
+    // The subdomain wildcard is what makes shielding an ad host stick
+    // (they rotate subdomains), but it only applies to multi-label
+    // hosts: on a single label it would turn "block https://com" —
+    // one shield click on a garbage request a page baited into the
+    // Inspector — into a rule matching every .com site's subresources.
+    let prefix = if host.contains('.') {
+        "([a-z0-9_-]+\\.)*"
+    } else {
+        ""
+    };
+    let filter = format!("^https?://{}{}{}", prefix, escape_regex(host), tail);
     Some(json!({
         "trigger": { "url-filter": filter },
         "action": { "type": "block" },
@@ -471,6 +481,16 @@ mod tests {
             "^https?://([a-z0-9_-]+\\.)*ads\\.example\\.com[:/]"
         );
         assert_eq!(rule["action"]["type"], "block");
+    }
+
+    #[test]
+    fn origin_rule_never_wildcards_a_single_label() {
+        // Blocking "https://com" must block exactly that host —
+        // wildcarding it would match every .com site's subresources.
+        let rule = origin_rule("https://com").expect("single-label origin is a rule");
+        assert_eq!(filter(&rule), "^https?://com[:/]");
+        let ip = origin_rule("https://localhost").expect("localhost is a rule");
+        assert_eq!(filter(&ip), "^https?://localhost[:/]");
     }
 
     #[test]
