@@ -119,6 +119,15 @@ mod mac {
     /// launch is making a decision that is not its to make.
     static ADS_ENABLED: AtomicBool = AtomicBool::new(false);
 
+    /// Generation counter for the user list. Commands run on tauri's
+    /// async runtime, so two rapid shield toggles can reach the store
+    /// in either order — and the compile that lands *last* would
+    /// silently become authoritative. Each recompile takes a ticket at
+    /// the moment it reads SQLite; a completion only installs its list
+    /// if its ticket is still the newest, so a stale compile can never
+    /// overwrite a fresher one.
+    static USER_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
     /// `Retained` is not `Send`, and `WKContentRuleList` is main-thread
     /// only, so the compiled lists live in main-thread-local storage.
     /// Every function below either starts on the main thread or hops
@@ -189,7 +198,10 @@ mod mac {
             compile_ads(app, &store);
         }
         match user_json {
-            Some(json) => compile_user(app, &store, &json),
+            Some(json) => {
+                let generation = USER_GEN.fetch_add(1, Ordering::SeqCst) + 1;
+                compile_user(app, &store, &json, generation);
+            }
             None => {
                 COMPILED.with(|c| c.borrow_mut().user = None);
                 apply_to_all(app);
@@ -249,9 +261,19 @@ mod mac {
         }
     }
 
-    fn compile_user(app: &AppHandle, store: &Retained<WKContentRuleListStore>, json: &str) {
+    fn compile_user(
+        app: &AppHandle,
+        store: &Retained<WKContentRuleListStore>,
+        json: &str,
+        generation: u64,
+    ) {
         let done_app = app.clone();
         let handler = RcBlock::new(move |list: *mut WKContentRuleList, err: *mut NSError| {
+            if USER_GEN.load(Ordering::SeqCst) != generation {
+                // A newer recompile was issued while this one was in
+                // flight; its result is the authoritative one.
+                return;
+            }
             match unsafe { Retained::retain(list) } {
                 Some(compiled) => {
                     COMPILED.with(|c| c.borrow_mut().user = Some(compiled));
@@ -354,11 +376,19 @@ mod mac {
     /// page means the next navigation. Nothing reloads on its own —
     /// throwing away a page the user is reading is not a privacy win.
     pub fn recompile_user_rules(app: &AppHandle) {
-        let origins = app
-            .try_state::<Storage>()
-            .and_then(|s| s.list_blocked_origins().ok())
-            .map(|rows| rows.into_iter().map(|r| r.origin).collect::<Vec<_>>())
-            .unwrap_or_default();
+        // A failed read keeps the last compiled list. Treating it as
+        // "zero origins" would silently drop native enforcement for
+        // every shielded origin while SQLite still shows them blocked.
+        let origins = match app.try_state::<Storage>().map(|s| s.list_blocked_origins()) {
+            Some(Ok(rows)) => rows.into_iter().map(|r| r.origin).collect::<Vec<_>>(),
+            _ => {
+                eprintln!("null-blocklist: origin read failed; keeping the current user list");
+                return;
+            }
+        };
+        // The ticket is taken at read time: the highest generation is
+        // the latest read, which saw every write before it.
+        let generation = USER_GEN.fetch_add(1, Ordering::SeqCst) + 1;
         let json = super::user_rules_json(&origins);
         let handle = app.clone();
         let _ = app.run_on_main_thread(move || {
@@ -368,8 +398,11 @@ mod mac {
             let Some(store) = (unsafe { WKContentRuleListStore::defaultStore(mtm) }) else {
                 return;
             };
+            if USER_GEN.load(Ordering::SeqCst) != generation {
+                return;
+            }
             match &json {
-                Some(json) => compile_user(&handle, &store, json),
+                Some(json) => compile_user(&handle, &store, json, generation),
                 None => {
                     COMPILED.with(|c| c.borrow_mut().user = None);
                     apply_to_all(&handle);

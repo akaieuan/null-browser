@@ -287,11 +287,21 @@ export function CustomStartPageInput({
     setDraft(value);
   }, [value]);
 
+  const commitRef = useRef<() => void>(() => {});
+
   function commit(next: string) {
     const trimmed = next.trim();
     if (/^https?:\/\//i.test(trimmed)) onChange(trimmed);
     else if (!trimmed) onChange(DEFAULT_START_PAGE);
   }
+
+  commitRef.current = () => commit(draft);
+
+  // Switching Settings sections remounts the section subtree
+  // (`key={section}`), and a click that changes sections does not blur
+  // this input first — flush the draft on unmount so a typed URL is
+  // not silently discarded.
+  useEffect(() => () => commitRef.current(), []);
 
   return (
     <input

@@ -132,7 +132,14 @@ export function ContextMenu({
       style={{
         left: pos.left,
         top: pos.top,
-        transform: entered ? undefined : "translateY(-4px) scale(0.98)",
+        // The initial offset only exists when motion is allowed —
+        // otherwise the transition classes are inert and the offset
+        // would survive as a permanent one-frame pop.
+        transform:
+          entered ||
+          window.matchMedia("(prefers-reduced-motion: reduce)").matches
+            ? undefined
+            : "translateY(-4px) scale(0.98)",
       }}
     >
       {items.map((item) => (

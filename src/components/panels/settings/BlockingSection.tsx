@@ -51,7 +51,9 @@ export function BlockingSection() {
       <div className="mt-1 flex flex-col">
         <Row label="Block ads and trackers">
           <Toggle
-            label={enabled ? "On" : "Off"}
+            // Unknown is unknown: while the backend hasn't answered,
+            // the label must not claim "Off".
+            label={enabled === null ? "—" : enabled ? "On" : "Off"}
             checked={enabled === true}
             disabled={enabled === null}
             onChange={setBlocking}

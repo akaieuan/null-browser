@@ -773,6 +773,7 @@ function App() {
 
   const commitPendingNewTab = useCallback(
     (text: string) => {
+      pendingNewTabRef.current = false;
       setPendingNewTab(false);
       const url = resolveQuery(text, searchEngine);
       if (url) openNewTabRef.current(url).catch(() => {});
@@ -781,6 +782,7 @@ function App() {
   );
 
   const cancelPendingNewTab = useCallback(() => {
+    pendingNewTabRef.current = false;
     setPendingNewTab(false);
     if (effectiveSidebarOpen) return;
     // URL-bar mode borrowed the field; hand it back to the page it
@@ -788,6 +790,19 @@ function App() {
     const act = tabsRef.current.find((t) => t.id === activeIdRef.current);
     setInput(act && act.url !== BLANK_URL ? act.url : "");
   }, [effectiveSidebarOpen]);
+  const cancelPendingNewTabRef = useRef(cancelPendingNewTab);
+  cancelPendingNewTabRef.current = cancelPendingNewTab;
+
+  // The flag must not outlive its moment: a tab arriving by ANY route
+  // (bookmark "open in new tab", a page's open-url event) ends the
+  // pending state — otherwise the next ordinary Enter in the URL bar
+  // would be hijacked into opening a second tab.
+  const pendingTabCountRef = useRef(0);
+  useEffect(() => {
+    const grew = tabs.length > pendingTabCountRef.current;
+    pendingTabCountRef.current = tabs.length;
+    if (pendingNewTab && grew) cancelPendingNewTabRef.current();
+  }, [tabs, pendingNewTab]);
 
   /** Transient download status, bottom-right of the chrome. */
   const [toast, setToast] = useState<{ text: string; ok: boolean } | null>(
@@ -839,6 +854,9 @@ function App() {
     async (id: string) => {
       const tab = tabs.find((t) => t.id === id);
       if (!tab) return;
+      // Switching tabs ends a pending new-tab attempt — the URL bar
+      // goes back to naming the page on screen.
+      if (pendingNewTabRef.current) cancelPendingNewTabRef.current();
       setSelection({ kind: "tab" });
       if (tab.hasWebview) await ipc.activateTab(id);
       else if (tab.url !== BLANK_URL) await materializeTab(tab.id, tab.url);
@@ -1102,6 +1120,9 @@ function App() {
           closeTabById(activeId).catch(() => {});
           break;
         case "open_location":
+          // ⌘L means "edit this page's location" — it ends a pending
+          // new-tab borrow of the same field.
+          if (pendingNewTabRef.current) cancelPendingNewTabRef.current();
           setSelection({ kind: "tab" });
           inputRef.current?.focus();
           inputRef.current?.select();
@@ -1282,8 +1303,12 @@ function App() {
     if (!url) return;
     try {
       // A pending new tab borrowed this field, so Enter here opens a
-      // tab rather than steering the one already on screen.
+      // tab rather than steering the one already on screen. The ref
+      // clears synchronously: the blur below fires before the state
+      // round-trips, and a blur that still reads pending would cancel
+      // the commit it is part of.
       if (pendingNewTabRef.current) {
+        pendingNewTabRef.current = false;
         setPendingNewTab(false);
         await openNewTabRef.current(url);
       } else {
@@ -1580,6 +1605,13 @@ function App() {
                 }}
                 onBlur={() => {
                   focusedRef.current = false;
+                  // Leaving the field abandons a pending new tab, the
+                  // same way the sidebar's inline row cancels on blur.
+                  // (Enter clears the ref synchronously before its own
+                  // blur, so a commit never cancels itself.)
+                  if (pendingNewTabRef.current) {
+                    cancelPendingNewTabRef.current();
+                  }
                 }}
                 placeholder="Search or enter URL"
                 spellCheck={false}
@@ -1971,7 +2003,10 @@ function App() {
               y={tabMenu.y}
               // React cannot paint over a native page webview, so the
               // menu has to stay inside the chrome column.
-              maxX={effectiveSidebarOpen ? sidebarWidth : window.innerWidth}
+              // Always the chrome column: the menu opens from a tab
+              // row, and anything wider slides it under the native
+              // page, where it would be invisible yet still focused.
+              maxX={sidebarWidth}
               items={items}
               onClose={closeTabMenu}
             />
