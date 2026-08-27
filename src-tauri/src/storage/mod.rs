@@ -380,8 +380,8 @@ impl Storage {
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);
         conn.execute(
-            "INSERT INTO artifacts (kind, title, source_url, source_title, markdown, model, created_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO artifacts (kind, title, source_url, source_title, markdown, model, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)",
             params![kind, title, source_url, source_title, markdown, model, now],
         )?;
         Ok(Artifact {
@@ -407,9 +407,12 @@ impl Storage {
         Ok(())
     }
 
-    /// Every artifact that is an exact duplicate (same kind, source and
-    /// body) of a *newer* one. Used by the startup cleanup; the newest
-    /// copy of each group is never in this list.
+    /// Every artifact that is an exact duplicate (same kind, title,
+    /// source and body) of a *newer* one. Used by the startup cleanup;
+    /// the newest copy of each group is never in this list. Title is
+    /// part of the match on purpose: sync_from_disk can make two notes'
+    /// bodies converge, and a looser match would let dedupe eat a note
+    /// the user deliberately kept under its own name.
     pub fn duplicate_artifacts(&self) -> rusqlite::Result<Vec<Artifact>> {
         let conn = self.conn();
         let mut stmt = conn.prepare(
@@ -419,6 +422,7 @@ impl Storage {
              WHERE EXISTS (
                SELECT 1 FROM artifacts b
                WHERE b.kind = a.kind AND b.source_url = a.source_url
+                 AND b.title = a.title
                  AND b.markdown = a.markdown AND b.id > a.id
              )",
         )?;
@@ -484,11 +488,26 @@ impl Storage {
     /// old-path/new-path dance.
     pub fn update_artifact(&self, id: i64, title: &str, markdown: &str) -> rusqlite::Result<()> {
         let conn = self.conn();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
         conn.execute(
-            "UPDATE artifacts SET title = ?1, markdown = ?2 WHERE id = ?3",
-            params![title, markdown, id],
+            "UPDATE artifacts SET title = ?1, markdown = ?2, updated_at = ?3 WHERE id = ?4",
+            params![title, markdown, now, id],
         )?;
         Ok(())
+    }
+
+    /// When Null itself last wrote this row — the freshness bar a file
+    /// mirror must clear before `notes::sync_from_disk` adopts it.
+    pub fn artifact_updated_at(&self, id: i64) -> rusqlite::Result<i64> {
+        let conn = self.conn();
+        conn.query_row(
+            "SELECT updated_at FROM artifacts WHERE id = ?1",
+            params![id],
+            |row| row.get(0),
+        )
     }
 
     pub fn get_artifact(&self, id: i64) -> rusqlite::Result<Artifact> {

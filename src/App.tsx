@@ -291,11 +291,18 @@ function App() {
     const id = activeIdRef.current;
     if (id) ipc.findInPage(id, "", true, true).catch(() => {});
   }, []);
-  // A find session belongs to one page; switching tabs ends it.
+  // A find session belongs to one page; switching tabs ends it — and
+  // clears the selection on the page being *left*. closeFind can't do
+  // that here: the activeIdRef sync effect runs first, so by now the
+  // ref already names the new tab.
+  const prevFindTabRef = useRef<string>("");
   useEffect(() => {
+    const prev = prevFindTabRef.current;
+    prevFindTabRef.current = activeId;
     if (findOpenRef.current) {
       setFindOpen(false);
       setFindQuery("");
+      if (prev) ipc.findInPage(prev, "", true, true).catch(() => {});
     }
   }, [activeId]);
 
@@ -378,6 +385,21 @@ function App() {
     }, 300);
     return () => window.clearTimeout(h);
   }, [tabs, activeId]);
+
+  // Flush on teardown too: the debounce above would lose the last
+  // ~300ms of tab changes when the app quits inside the window.
+  useEffect(() => {
+    const flush = () => {
+      const real = tabsRef.current.filter((t) => /^https?:\/\//.test(t.url));
+      const idx = real.findIndex((t) => t.id === activeIdRef.current);
+      saveSession(
+        real.map((t) => ({ url: t.url, title: t.title })),
+        idx < 0 ? 0 : idx,
+      );
+    };
+    window.addEventListener("pagehide", flush);
+    return () => window.removeEventListener("pagehide", flush);
+  }, []);
 
   // Window-drag. The attribute alone is flaky across Tauri/WebView
   // versions; calling startDragging() is reliable. Opt out when the
@@ -615,7 +637,11 @@ function App() {
       // clutter every vertical-tab browser has to design away. If one is
       // already open and empty, go to it instead of making another.
       if (resolved === BLANK_URL) {
-        const blank = tabsRef.current.find((t) => !t.hasWebview);
+        // Blank means url === BLANK_URL, not !hasWebview: a dormant
+        // session-restored tab also has no webview but carries a real
+        // URL, and reusing it here would hijack — then overwrite — a
+        // restored tab instead of opening a new one.
+        const blank = tabsRef.current.find((t) => t.url === BLANK_URL);
         if (blank) {
           setSelection({ kind: "tab" });
           await ipc.hideAllTabs();
@@ -1201,13 +1227,21 @@ function App() {
               (t) => t.id === activeIdRef.current,
             );
             const dropped = tabsRef.current.find((t) => t.id === tabId);
-            if (!dropped?.hasWebview) return;
-            if (!act?.hasWebview || act.id === dropped.id) {
-              activateTabById(tabId).catch(() => {});
-              return;
-            }
-            setSelection({ kind: "tab" });
-            setSplitPair([act.id, dropped.id]);
+            if (!dropped || dropped.url === BLANK_URL) return;
+            // A dormant restored tab can be dropped to split too: wake
+            // it first, then pair it.
+            const ready = dropped.hasWebview
+              ? Promise.resolve()
+              : materializeTabRef.current(dropped.id, dropped.url);
+            ready
+              .then(() => {
+                if (!act?.hasWebview || act.id === dropped.id) {
+                  return activateTabById(tabId);
+                }
+                setSelection({ kind: "tab" });
+                setSplitPair([act.id, dropped.id]);
+              })
+              .catch(() => {});
           }}
           onDropBookmarkToSplit={(url) => {
             openInSplit(url).catch(() => {});
@@ -1215,7 +1249,10 @@ function App() {
           onSplitDragOver={setSplitDropHint}
           onPinTab={(tabId, folderId) => {
             const t = tabsRef.current.find((x) => x.id === tabId);
-            if (!t?.hasWebview) return;
+            // Dormant restored tabs pin fine — the URL is real even
+            // before the webview exists. Only a blank tab has nothing
+            // to pin.
+            if (!t || t.url === BLANK_URL) return;
             if (bookmarksRef.current.some((b) => b.url === t.url)) return;
             (async () => {
               const b = await ipc.addBookmark(t.url, t.title);
@@ -1372,6 +1409,10 @@ function App() {
                       }
                     } else if (e.key === "Escape") {
                       e.preventDefault();
+                      // Stop the native event too, or the window-level
+                      // Escape handler fires on the same keypress and
+                      // closes Notes / a panel — two layers for one key.
+                      e.stopPropagation();
                       closeFind();
                     }
                   }}
@@ -1496,7 +1537,13 @@ function App() {
             {showHome && (
               <Home
                 onOpenClip={(clip) => {
-                  setOpenClip(clip);
+                  // Through get_artifact so external edits to the file
+                  // mirror are adopted on open (notes::sync_from_disk),
+                  // same as opening from the Notes list.
+                  ipc
+                    .getArtifact(clip.id)
+                    .then((fresh) => setOpenClip(fresh ?? clip))
+                    .catch(() => setOpenClip(clip));
                   setNotesMode((m) => m ?? "panel");
                 }}
                 onOpenUrl={(url) => {

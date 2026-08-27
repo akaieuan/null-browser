@@ -7,7 +7,7 @@
 
 use rusqlite::Connection;
 
-const LATEST: i64 = 8;
+const LATEST: i64 = 9;
 
 pub fn run(conn: &mut Connection) -> rusqlite::Result<()> {
     let current: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
@@ -21,6 +21,7 @@ pub fn run(conn: &mut Connection) -> rusqlite::Result<()> {
             6 => MIGRATION_006,
             7 => MIGRATION_007,
             8 => MIGRATION_008,
+            9 => MIGRATION_009,
             _ => unreachable!("no migration defined for version {version}"),
         };
         let tx = conn.transaction()?;
@@ -156,4 +157,15 @@ const MIGRATION_007: &str = r#"
 const MIGRATION_008: &str = r#"
     ALTER TABLE bookmarks ADD COLUMN kind TEXT NOT NULL DEFAULT 'bookmark';
     ALTER TABLE bookmarks ADD COLUMN parent_id INTEGER REFERENCES bookmarks(id);
+"#;
+
+/// Notes gained read-direction sync (external edits to the file mirror
+/// are adopted on open). `updated_at` records the last time Null itself
+/// wrote the row, so sync can tell an external edit (file newer) from a
+/// stale mirror left behind by a failed write (file older) — adopting
+/// the latter would silently revert the user's newer note. Backfilled
+/// to `created_at`: existing mirrors were written at creation.
+const MIGRATION_009: &str = r#"
+    ALTER TABLE artifacts ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0;
+    UPDATE artifacts SET updated_at = created_at;
 "#;

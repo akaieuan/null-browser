@@ -137,6 +137,17 @@ fn yaml_unescape(s: &str) -> String {
 /// matter keys are ignored, not errors: Obsidian and friends add their
 /// own.
 pub fn parse_note(content: &str) -> (Option<String>, String) {
+    // CRLF-normalized before anything else: an editor that saves with
+    // Windows line endings would otherwise hide the front matter from
+    // the delimiter match, and the whole block would be adopted as
+    // body text.
+    let normalized;
+    let content = if content.contains('\r') {
+        normalized = content.replace("\r\n", "\n");
+        normalized.as_str()
+    } else {
+        content
+    };
     if let Some(rest) = content.strip_prefix("---\n") {
         if let Some(end) = rest.find("\n---\n") {
             let front = &rest[..end];
@@ -190,7 +201,30 @@ pub fn sync_from_disk(
     if on_disk == note_content(&artifact.title, &artifact.source_url, &artifact.markdown) {
         return None;
     }
+    // A mirror older than the row's last write is a stale leftover (a
+    // failed or interrupted write_note), not an external edit —
+    // adopting it would silently revert the user's newer note. Only a
+    // file written after Null's own last write clears the bar; when the
+    // mtime can't be read, nothing is adopted.
+    let file_mtime = fs::metadata(path)
+        .ok()?
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs() as i64;
+    if file_mtime <= storage.artifact_updated_at(artifact.id).ok()? {
+        return None;
+    }
     let (title, markdown) = parse_note(&on_disk);
+    // Never adopt an empty body over a non-empty note. Editors save by
+    // truncate-then-write, and a read that lands mid-save would
+    // otherwise erase the SQLite copy — which the open editor's next
+    // autosave would then write back over the file, losing both
+    // copies. Emptying a note on purpose works in the app.
+    if markdown.trim().is_empty() && !artifact.markdown.trim().is_empty() {
+        return None;
+    }
     let title = title.unwrap_or_else(|| artifact.title.clone());
     if title == artifact.title && markdown == artifact.markdown {
         return None;
@@ -286,6 +320,14 @@ mod tests {
         let md = "before\n\n---\n\nafter";
         let (_, body) = parse_note(&note_content("t", "s", md));
         assert_eq!(body, md);
+    }
+
+    #[test]
+    fn parse_handles_crlf_files() {
+        let (title, body) =
+            parse_note("---\r\ntitle: \"T\"\r\nsource: s\r\n---\r\n\r\nbody line\r\n");
+        assert_eq!(title.as_deref(), Some("T"));
+        assert_eq!(body, "body line");
     }
 
     #[test]

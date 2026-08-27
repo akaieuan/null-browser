@@ -162,7 +162,7 @@ export function fixtureFor(cmd: string, args?: Record<string, unknown>): unknown
     }
     case "reorder_bookmarks": {
       const order = new Map(
-        ((args?.ids as number[]) ?? []).map((id, i) => [id, i]),
+        ((args?.orderedIds as number[]) ?? []).map((id, i) => [id, i]),
       );
       BOOKMARKS.sort(
         (a, b) =>
