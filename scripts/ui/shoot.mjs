@@ -32,7 +32,8 @@ const STATES = [
   ['02b-note-viewer', 'Note', 'Markdown, rendered. The heading is dropped from the body because the header already carries it.'],
   ['03-history', 'History', 'Header and body share one measure, so the panel has a single left edge and a single right edge.'],
   ['04-network', 'Network', 'Every outbound connection, grouped by origin. Blocked origins are struck through.'],
-  ['05-settings', 'Settings', 'The selected palette is haloed rather than tinted — a colour swatch cannot be marked with a colour.'],
+  ['05-settings', 'Settings', 'A left rail names the sections and the content column takes its own measure beside them. The selected palette is haloed rather than tinted — a colour swatch cannot be marked with a colour.'],
+  ['05b-settings-blocking', 'Blocking', 'The bundled rule list is one switch. Origins blocked by hand from the Network panel are listed beneath it, each with its own way back.'],
 ];
 
 /**
@@ -144,6 +145,9 @@ try {
 
   await page.eval(`__clickLabel('Settings')`);
   await shot('05-settings');
+
+  await page.eval(`__click('Blocking')`);
+  await shot('05b-settings-blocking');
 
   console.log('empty states');
   await page.goto(APP + '?empty=1');

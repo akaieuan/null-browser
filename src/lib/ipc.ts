@@ -137,6 +137,9 @@ export const ipc = {
     invoke<void>("unblock_origin", { origin }),
   listBlockedOrigins: () =>
     invoke<BlockedOrigin[]>("list_blocked_origins"),
+  adBlockingEnabled: () => invoke<boolean>("ad_blocking_enabled"),
+  setAdBlocking: (enabled: boolean) =>
+    invoke<void>("set_ad_blocking", { enabled }),
 
   listArtifacts: () => invoke<Artifact[]>("list_artifacts"),
   getArtifact: (id: number) => invoke<Artifact>("get_artifact", { id }),

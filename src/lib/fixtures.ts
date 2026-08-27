@@ -179,6 +179,8 @@ export function fixtureFor(cmd: string, args?: Record<string, unknown>): unknown
     case "list_blocked_origins":
       return [{ origin: "https://www.google-analytics.com", created_at: now - 86400 }];
     case "network_is_paused": return false;
+    case "ad_blocking_enabled": return false;
+    case "set_ad_blocking": return null;
     case "get_notes_dir": return "/Users/you/Documents/Null";
     case "get_favicons": return [];
     case "create_note":

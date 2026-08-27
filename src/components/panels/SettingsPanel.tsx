@@ -1,28 +1,72 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Check, ChevronDown, Moon, Sun, Trash2 } from "lucide-react";
+import { useState } from "react";
+import { X } from "lucide-react";
 
-import { Panel } from "@/components/panels/Panel";
-import { Kicker } from "@/components/ui/atoms";
-import { ipc } from "@/lib/ipc";
-import {
-  CORNERS,
-  DEFAULT_START_PAGE,
-  GLASS_OPTIONS,
-  isCustomStartPage,
-  SEARCH_ENGINES,
-  usePreferences,
-  type CornersPref,
-  type GlassPref,
-  type StartPagePref,
-} from "@/lib/preferences";
-import { PALETTES, useTheme } from "@/lib/theme";
+import { AboutSection } from "@/components/panels/settings/AboutSection";
+import { AppearanceSection } from "@/components/panels/settings/AppearanceSection";
+import { BlockingSection } from "@/components/panels/settings/BlockingSection";
+import { BrowsingSection } from "@/components/panels/settings/BrowsingSection";
+import { NotesSection } from "@/components/panels/settings/NotesSection";
+import { PrivacySection } from "@/components/panels/settings/PrivacySection";
+import { Card, Kicker } from "@/components/ui/atoms";
+import { Button } from "@/components/ui/button";
+import { PANEL_HEADER_HEIGHT } from "@/lib/layout";
 import { cn } from "@/lib/utils";
 
+type SettingsSection =
+  | "appearance"
+  | "browsing"
+  | "privacy"
+  | "blocking"
+  | "notes"
+  | "about";
+
 /**
- * The one preferences surface. Everything that used to live in the
- * profile dropdown is a section here instead — the dropdown reserved a
- * strip of the window, which reflowed the live page just to show a
- * settings card.
+ * The nav, in the order it reads. A group carries a kicker only when its
+ * members need a word to hold them together — the first group is the two
+ * things everyone opens Settings for, and naming it would be filing for
+ * the sake of filing.
+ */
+const GROUPS: Array<{
+  kicker?: string;
+  items: Array<{ id: SettingsSection; label: string }>;
+}> = [
+  {
+    items: [
+      { id: "appearance", label: "Appearance" },
+      { id: "browsing", label: "Browsing" },
+    ],
+  },
+  {
+    kicker: "Privacy",
+    items: [
+      { id: "privacy", label: "Privacy" },
+      { id: "blocking", label: "Blocking" },
+    ],
+  },
+  {
+    kicker: "Library",
+    items: [{ id: "notes", label: "Notes" }],
+  },
+  {
+    items: [{ id: "about", label: "About" }],
+  },
+];
+
+/**
+ * The one preferences surface.
+ *
+ * It does not use `Panel`. Panel's contract is a single column on a
+ * single measure — one left edge for the header and the body — and this
+ * surface has two columns, so adopting it would mean adding an escape
+ * hatch to the frame every other panel depends on. The header geometry
+ * is still Panel's: the same PANEL_HEADER_HEIGHT, the same kicker, the
+ * same close button, so switching between Settings and History moves
+ * nothing at the top of the card.
+ *
+ * Sections are chosen from the left rail rather than scrolled past. A
+ * settings surface that is one long scroll makes the user read
+ * everything to find one switch, and the rail is the same source-list
+ * grammar the sidebar already uses.
  */
 export function SettingsPanel({
   onClose,
@@ -31,564 +75,111 @@ export function SettingsPanel({
   onClose: () => void;
   onOpenUrl: (url: string) => void;
 }) {
-  return (
-    <Panel title="Settings" onClose={onClose} measure="form" align="left">
-      <div className="space-y-10 pt-2">
-        <AppearanceSection />
-        <BrowsingSection />
-        <PrivacySection />
-        <NotesSection />
-        <AboutSection onOpenUrl={onOpenUrl} />
-      </div>
-    </Panel>
-  );
-}
+  const [section, setSection] = useState<SettingsSection>("appearance");
 
-function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <section>
-      {/* h3: Panel renders the panel's own title as the h2. */}
-      <Kicker as="h3">{title}</Kicker>
-      <div className="mt-1 flex flex-col">{children}</div>
-    </section>
-  );
-}
+    // Same entrance as `Panel`, restated because this surface does not
+    // use that frame (see the note above).
+    <Card className="z-40 motion-safe:animate-[np-rise_160ms_ease-out]">
+      <header className="shrink-0" style={{ height: PANEL_HEADER_HEIGHT }}>
+        {/* pl-6 puts the kicker on the same x as the nav labels below it,
+            so the header names the surface from the column that lists
+            its sections. */}
+        <div className="flex h-full w-full items-center justify-between pl-6 pr-6">
+          <Kicker>Settings</Kicker>
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="Close Settings"
+            onClick={onClose}
+            className="-mr-1.5 h-7 w-7"
+          >
+            <X size={14} strokeWidth={1.5} />
+          </Button>
+        </div>
+      </header>
 
-function Row({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div className="flex min-h-11 items-center justify-between gap-6 py-2.5 text-sm">
-      <span className="shrink-0 text-foreground">{label}</span>
-      <span className="min-w-0 text-muted-foreground">{children}</span>
-    </div>
-  );
-}
-
-function AppearanceSection() {
-  const { palette, mode, setPalette, setMode } = useTheme();
-  const { corners, setCorners, glass, setGlass, hoverReveal, setHoverReveal } =
-    usePreferences();
-  const active = PALETTES.find((p) => p.id === palette) ?? PALETTES[0];
-  return (
-    <Section title="Appearance">
-      <Row label="Theme">
-        <div className="flex items-center gap-3">
-          <span className="text-muted-foreground">{active.label}</span>
-          {/* The selected swatch is haloed, not tinted. Marking it with
-              --select would make it invisible on whichever swatch *is*
-              --select — which, for the default palette, is the one you
-              are most likely to be looking at. A ring separated from the
-              swatch by a gap in the background colour reads on any hue. */}
-          <div className="flex items-center gap-2.5">
-            {PALETTES.map((p) => {
-              const selected = palette === p.id;
-              return (
-                <button
-                  key={p.id}
-                  type="button"
-                  aria-label={p.label}
-                  aria-pressed={selected}
-                  title={p.label}
-                  onClick={() => setPalette(p.id)}
-                  className={cn(
-                    "h-4 w-4 rounded-full border border-border transition",
-                    "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-offset-2 focus-visible:ring-offset-background focus-visible:ring-ring",
-                    selected
-                      ? "ring-1 ring-offset-2 ring-offset-background ring-foreground"
-                      : "opacity-70 hover:opacity-100",
-                  )}
-                  style={{ background: p.swatch }}
+      <div className="flex min-h-0 flex-1">
+        <nav
+          aria-label="Settings sections"
+          className="flex w-48 shrink-0 flex-col gap-5 overflow-y-auto px-4 pb-8"
+        >
+          {GROUPS.map((group, i) => (
+            <div key={group.kicker ?? i} className="flex flex-col gap-0.5">
+              {group.kicker && (
+                <Kicker as="span" className="block px-2 pb-1.5">
+                  {group.kicker}
+                </Kicker>
+              )}
+              {group.items.map((item) => (
+                <NavRow
+                  key={item.id}
+                  label={item.label}
+                  selected={section === item.id}
+                  onClick={() => setSection(item.id)}
                 />
-              );
-            })}
+              ))}
+            </div>
+          ))}
+        </nav>
+
+        <div className="min-w-0 flex-1 overflow-y-auto">
+          {/* `key` is the animation: switching sections remounts this
+              column, which is what re-fires the entrance. Without it
+              React keeps the same node and the new section's rows
+              simply replace the old ones in place. */}
+          <div
+            key={section}
+            className="max-w-2xl px-8 pb-20 motion-safe:animate-[np-rise_160ms_ease-out]"
+          >
+            {section === "appearance" && <AppearanceSection />}
+            {section === "browsing" && <BrowsingSection />}
+            {section === "privacy" && <PrivacySection />}
+            {section === "blocking" && <BlockingSection />}
+            {section === "notes" && <NotesSection />}
+            {section === "about" && <AboutSection onOpenUrl={onOpenUrl} />}
           </div>
         </div>
-      </Row>
-      <Row label="Mode">
-        <div className="flex items-center gap-1 rounded-md border border-border p-0.5">
-          <ModeButton
-            label="Light"
-            active={mode === "light"}
-            onClick={() => setMode("light")}
-          >
-            <Sun size={14} strokeWidth={1.5} />
-          </ModeButton>
-          <ModeButton
-            label="Dark"
-            active={mode === "dark"}
-            onClick={() => setMode("dark")}
-          >
-            <Moon size={14} strokeWidth={1.5} />
-          </ModeButton>
-        </div>
-      </Row>
-      <Row label="Corners">
-        <SegmentedControl
-          options={CORNERS.map((c) => ({ id: c.id, label: c.label }))}
-          value={corners}
-          onChange={(id) => setCorners(id as CornersPref)}
-        />
-      </Row>
-      <Row label="Glass">
-        {/* Only means anything inside the app — a plain browser has no
-            vibrancy to show through, and the control says so. */}
-        <SegmentedControl
-          options={GLASS_OPTIONS.map((g) => ({ id: g.id, label: g.label }))}
-          value={glass}
-          onChange={(id) => setGlass(id as GlassPref)}
-        />
-      </Row>
-      <Row label="Sidebar">
-        <Toggle
-          label="Open on hover at the left edge"
-          checked={hoverReveal}
-          onChange={setHoverReveal}
-        />
-      </Row>
-    </Section>
+      </div>
+    </Card>
   );
 }
 
-/**
- * A row of mutually exclusive options — the Mode control's shape,
- * generalized. Selection is a fill, not the accent: these are quiet
- * chrome controls, and the accent stays reserved for chosen content.
- */
-function SegmentedControl({
-  options,
-  value,
-  onChange,
-}: {
-  options: Array<{ id: string; label: string }>;
-  value: string;
-  onChange: (id: string) => void;
-}) {
-  return (
-    <div className="flex items-center gap-1 rounded-md border border-border p-0.5">
-      {options.map((o) => (
-        <button
-          key={o.id}
-          type="button"
-          aria-pressed={value === o.id}
-          onClick={() => onChange(o.id)}
-          className={cn(
-            "flex h-6 items-center rounded-sm px-2 text-xs transition-colors",
-            "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
-            value === o.id
-              ? "bg-muted text-foreground"
-              : "text-muted-foreground hover:text-foreground",
-          )}
-        >
-          {o.label}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-function Toggle({
+/** SidebarRow's grammar, minus the parts a settings rail has no use for. */
+function NavRow({
   label,
-  checked,
-  onChange,
+  selected,
+  onClick,
 }: {
   label: string;
-  checked: boolean;
-  onChange: (next: boolean) => void;
+  selected: boolean;
+  onClick: () => void;
 }) {
   return (
     <button
       type="button"
-      role="switch"
-      aria-checked={checked}
-      onClick={() => onChange(!checked)}
-      className="flex items-center gap-2.5 text-xs text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+      onClick={onClick}
+      aria-current={selected ? "true" : undefined}
+      className={cn(
+        "relative flex h-7 w-full items-center rounded-md px-2 text-left text-[13px] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+        selected
+          ? "bg-accent text-foreground"
+          : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
+      )}
     >
+      {/* The selection signal is the bar, not the fill — see SidebarRow.
+          Every row carries one and scales it on the vertical: a bar
+          that is conditionally rendered can only appear, and the
+          selection moving between two rows should read as one thing
+          moving. Scale, not opacity — brightness stays put. */}
       <span
         aria-hidden="true"
         className={cn(
-          "flex h-4.5 w-8 items-center rounded-full p-0.5 transition-colors",
-          checked ? "bg-select" : "bg-accent",
+          "absolute left-0 top-1 bottom-1 w-0.5 origin-center rounded-full bg-select transition-transform duration-150 ease-out",
+          selected ? "scale-y-100" : "scale-y-0",
         )}
-      >
-        <span
-          className={cn(
-            "h-3.5 w-3.5 rounded-full bg-background transition-transform",
-            checked && "translate-x-3.5",
-          )}
-        />
-      </span>
+      />
       {label}
     </button>
-  );
-}
-
-function ModeButton({
-  label,
-  active,
-  onClick,
-  children,
-}: {
-  label: string;
-  active: boolean;
-  onClick: () => void;
-  children: ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      aria-label={label}
-      aria-pressed={active}
-      onClick={onClick}
-      className={cn(
-        "flex h-6 items-center gap-1.5 rounded-sm px-2 text-xs transition-colors",
-        active
-          ? "bg-accent text-foreground"
-          : "text-muted-foreground hover:text-foreground",
-      )}
-    >
-      {children}
-      <span>{label}</span>
-    </button>
-  );
-}
-
-/** Start page, search engine, and the local profile name. */
-function BrowsingSection() {
-  const {
-    name,
-    setName,
-    startPage,
-    setStartPage,
-    searchEngine,
-    setSearchEngine,
-  } = usePreferences();
-  const [nameDraft, setNameDraft] = useState(name);
-
-  useEffect(() => {
-    setNameDraft(name);
-  }, [name]);
-
-  const startPageKey: "null" | "duckduckgo" | "custom" =
-    startPage === "null" || startPage === "duckduckgo" ? startPage : "custom";
-  const customUrl = isCustomStartPage(startPage) ? startPage : "";
-
-  function handleStartPageChange(next: string) {
-    if (next === "null" || next === "duckduckgo") {
-      setStartPage(next);
-    } else if (next === "custom" && !isCustomStartPage(startPage)) {
-      setStartPage("");
-    }
-  }
-
-  return (
-    <Section title="Browsing">
-      <Row label="Name">
-        {/* Matches the dropdowns beneath it: same height, same width,
-            same left-aligned value. Right-aligning text inside a field
-            you type into fights the caret for no gain — the row's right
-            rail is already held by the box's own edge. */}
-        <input
-          type="text"
-          value={nameDraft}
-          onChange={(e) => setNameDraft(e.target.value)}
-          onBlur={() => {
-            if (nameDraft !== name) setName(nameDraft);
-          }}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") e.currentTarget.blur();
-          }}
-          placeholder="Null"
-          spellCheck={false}
-          className="h-8 w-56 rounded-md border border-border bg-input px-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-ring focus:outline-none"
-        />
-      </Row>
-      <Row label="Start page">
-        <div className="w-56">
-          <Dropdown
-            value={startPageKey}
-            options={[
-              { value: "null", label: "Null home" },
-              { value: "duckduckgo", label: "DuckDuckGo" },
-              { value: "custom", label: "Custom URL" },
-            ]}
-            onChange={handleStartPageChange}
-          />
-          {startPageKey === "custom" && (
-            <CustomStartPageInput value={customUrl} onChange={setStartPage} />
-          )}
-        </div>
-      </Row>
-      <Row label="Search">
-        <div className="w-56">
-          <Dropdown
-            value={searchEngine}
-            options={SEARCH_ENGINES.map((e) => ({
-              value: e.id,
-              label: e.label,
-              hint: e.note,
-            }))}
-            onChange={(v) => setSearchEngine(v as typeof searchEngine)}
-          />
-        </div>
-      </Row>
-    </Section>
-  );
-}
-
-function PrivacySection() {
-  const [count, setCount] = useState<number | null>(null);
-  const [clearState, setClearState] = useState<"idle" | "confirm" | "done">(
-    "idle",
-  );
-
-  const refresh = () => {
-    ipc
-      .listHistory(10000)
-      .then((rows) => setCount(rows.length))
-      .catch(() => setCount(null));
-  };
-
-  useEffect(refresh, []);
-
-  async function clearBrowsingData() {
-    if (clearState !== "confirm") {
-      setClearState("confirm");
-      window.setTimeout(() => {
-        setClearState((s) => (s === "confirm" ? "idle" : s));
-      }, 3000);
-      return;
-    }
-    try {
-      await Promise.all([ipc.clearHistory(), ipc.clearTabStorage()]);
-    } catch {
-      // best-effort
-    }
-    setClearState("done");
-    refresh();
-    window.setTimeout(() => setClearState("idle"), 1500);
-  }
-
-  return (
-    <Section title="Privacy">
-      <Row label="Telemetry">off</Row>
-      <Row label="Cloud connections">none</Row>
-      <Row label="All data">local</Row>
-      <Row label="History">
-        {count === null ? "—" : `${count} ${count === 1 ? "entry" : "entries"}`}
-      </Row>
-      <Row label="Clear browsing data">
-        <button
-          type="button"
-          onClick={clearBrowsingData}
-          className={cn(
-            "flex items-center gap-2 rounded-md border px-3 py-1.5 text-xs transition-colors",
-            clearState === "confirm"
-              ? "border-danger text-danger"
-              : "border-border text-muted-foreground hover:bg-muted hover:text-foreground",
-          )}
-        >
-          <Trash2 size={12} strokeWidth={1.5} />
-          {clearState === "confirm"
-            ? "Click again to wipe history + logins"
-            : clearState === "done"
-              ? "Cleared"
-              : "Clear history & logins"}
-        </button>
-      </Row>
-    </Section>
-  );
-}
-
-function NotesSection() {
-  const [dir, setDir] = useState<string | null>(null);
-  useEffect(() => {
-    ipc.getNotesDir().then(setDir).catch(() => {});
-  }, []);
-  return (
-    <Section title="Notes">
-      <Row label="Notes folder">
-        <span
-          className="block truncate font-mono text-[11px]"
-          title={dir ?? undefined}
-        >
-          {dir ?? "—"}
-        </span>
-      </Row>
-      <Row label="Format">markdown · YAML front matter</Row>
-      <Row label="Inference">never — Null captures, nothing more</Row>
-    </Section>
-  );
-}
-
-function AboutSection({ onOpenUrl }: { onOpenUrl: (url: string) => void }) {
-  const [version, setVersion] = useState<string | null>(null);
-  useEffect(() => {
-    ipc.getAppVersion().then(setVersion).catch(() => {});
-  }, []);
-  return (
-    <Section title="About">
-      <Row label="Null">
-        <span className="flex items-center gap-2">
-          <ZeroMark />
-          <span>{version ? `v${version}` : "—"}</span>
-        </span>
-      </Row>
-      <Row label="Source">
-        <button
-          type="button"
-          onClick={() => onOpenUrl("https://github.com/akaieuan/null-browser")}
-          className="text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
-        >
-          github.com/akaieuan/null-browser
-        </button>
-      </Row>
-    </Section>
-  );
-}
-
-/**
- * The Null mark. Flat — the glow it used to carry was a drop shadow
- * wearing an SVG filter, which the design language does not allow.
- *
- * It inherits its colour rather than taking `--select`. The accent means
- * "this is the chosen thing"; a 14px mark beside a version number is not
- * chosen, and painting it in the accent both says so falsely and makes
- * the mark change hue with every palette.
- */
-function ZeroMark() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 96 96" fill="none" aria-hidden="true">
-      <ellipse
-        cx="48"
-        cy="48"
-        rx="20"
-        ry="26"
-        stroke="currentColor"
-        strokeWidth="9"
-      />
-    </svg>
-  );
-}
-
-type DropdownOption = { value: string; label: string; hint?: string };
-
-function Dropdown({
-  value,
-  options,
-  onChange,
-}: {
-  value: string;
-  options: DropdownOption[];
-  onChange: (next: string) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [open]);
-
-  const current = options.find((o) => o.value === value) ?? options[0];
-
-  return (
-    <div ref={ref} className="relative">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className={cn(
-          "flex h-8 w-full items-center justify-between rounded-md border bg-input px-2.5 text-sm text-foreground transition-colors",
-          open ? "border-ring" : "border-border hover:border-ring/60",
-        )}
-      >
-        <span className="truncate">{current?.label}</span>
-        <ChevronDown
-          size={14}
-          strokeWidth={1.5}
-          className={cn(
-            "shrink-0 text-muted-foreground transition-transform",
-            open && "rotate-180",
-          )}
-        />
-      </button>
-      {open && (
-        <div className="absolute left-0 right-0 top-full z-10 mt-1 overflow-hidden rounded-md border border-border bg-background">
-          {options.map((o) => {
-            const selected = o.value === value;
-            return (
-              <button
-                key={o.value}
-                type="button"
-                onClick={() => {
-                  onChange(o.value);
-                  setOpen(false);
-                }}
-                className={cn(
-                  "flex w-full items-center gap-2 px-2.5 py-2 text-left text-sm transition-colors",
-                  selected
-                    ? "bg-muted/60 text-foreground"
-                    : "text-foreground hover:bg-muted/60",
-                )}
-              >
-                <span
-                  className={cn(
-                    "flex h-3 w-3 shrink-0 items-center justify-center",
-                    selected ? "text-select" : "text-transparent",
-                  )}
-                >
-                  <Check size={12} strokeWidth={2} />
-                </span>
-                <span className="min-w-0 flex-1 truncate">{o.label}</span>
-                {o.hint && (
-                  <span className="shrink-0 truncate text-[10px] text-muted-foreground">
-                    {o.hint}
-                  </span>
-                )}
-              </button>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function CustomStartPageInput({
-  value,
-  onChange,
-}: {
-  value: string;
-  onChange: (next: StartPagePref) => void;
-}) {
-  const [draft, setDraft] = useState(value);
-
-  useEffect(() => {
-    setDraft(value);
-  }, [value]);
-
-  function commit(next: string) {
-    const trimmed = next.trim();
-    if (/^https?:\/\//i.test(trimmed)) onChange(trimmed);
-    else if (!trimmed) onChange(DEFAULT_START_PAGE);
-  }
-
-  return (
-    <input
-      type="text"
-      value={draft}
-      onChange={(e) => setDraft(e.target.value)}
-      onBlur={(e) => commit(e.target.value)}
-      onKeyDown={(e) => {
-        if (e.key === "Enter") e.currentTarget.blur();
-      }}
-      placeholder="https://example.com"
-      spellCheck={false}
-      autoCapitalize="off"
-      autoCorrect="off"
-      className="mt-1.5 h-7 w-full rounded-md border border-border bg-input px-2 text-xs text-foreground placeholder:text-muted-foreground focus:border-ring focus:outline-none"
-    />
   );
 }
