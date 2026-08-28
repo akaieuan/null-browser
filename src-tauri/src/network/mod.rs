@@ -151,9 +151,7 @@ pub fn record_subresource(app: &AppHandle, url_str: &str, initiator: &str) {
     // exposure, not blocks (which are, by design, uncountable).
     if let Some(host) = url.host_str() {
         if crate::blocklist::is_tracker_host(host) {
-            if let Some(storage) = app.try_state::<Storage>() {
-                let _ = storage.record_tracker_sighting(utc_day());
-            }
+            note_tracker_sighting(app);
         }
     }
 
@@ -179,6 +177,82 @@ pub fn record_subresource(app: &AppHandle, url_str: &str, initiator: &str) {
 /// the cost of a cell boundary that is not the viewer's local midnight.
 fn utc_day() -> i64 {
     now_secs() / 86_400
+}
+
+/// Buffered tracker-sighting count. `record_subresource` runs on the
+/// beacon path, once per observed subresource — an ad-heavy page fires
+/// hundreds — so writing an fsync'd upsert each, on the one mutex the
+/// UI also reads through, would jank the interface. Counts accrue here
+/// and flush to SQLite at most once every `FLUSH_SECS`; the graph is
+/// approximate exposure, so a few seconds of lag is invisible.
+struct Sightings {
+    day: i64,
+    pending: i64,
+    last_flush: i64,
+}
+static SIGHTINGS: Mutex<Sightings> = Mutex::new(Sightings {
+    day: 0,
+    pending: 0,
+    last_flush: 0,
+});
+const FLUSH_SECS: i64 = 10;
+
+fn note_tracker_sighting(app: &AppHandle) {
+    let today = utc_day();
+    let now = now_secs();
+    // Under the lock: roll the day if needed, add this sighting, and
+    // decide whether it is time to flush. The writes happen after the
+    // lock is dropped.
+    let (roll, flush) = {
+        let mut s = SIGHTINGS.lock().unwrap_or_else(|e| e.into_inner());
+        let mut roll = None;
+        if s.day != today {
+            if s.pending > 0 {
+                roll = Some((s.day, s.pending)); // yesterday's tail
+            }
+            s.day = today;
+            s.pending = 0;
+            s.last_flush = now;
+        }
+        s.pending += 1;
+        let flush = if now - s.last_flush >= FLUSH_SECS {
+            let n = s.pending;
+            s.pending = 0;
+            s.last_flush = now;
+            Some((s.day, n))
+        } else {
+            None
+        };
+        (roll, flush)
+    };
+    if roll.is_some() || flush.is_some() {
+        if let Some(storage) = app.try_state::<Storage>() {
+            for (day, n) in roll.into_iter().chain(flush) {
+                let _ = storage.add_tracker_sightings(day, n);
+            }
+        }
+    }
+}
+
+/// Force any buffered sightings to disk. Called before the graph reads,
+/// so it never shows a count ~`FLUSH_SECS` stale.
+pub fn flush_tracker_sightings(app: &AppHandle) {
+    let flush = {
+        let mut s = SIGHTINGS.lock().unwrap_or_else(|e| e.into_inner());
+        if s.pending > 0 {
+            let out = (s.day, s.pending);
+            s.pending = 0;
+            s.last_flush = now_secs();
+            Some(out)
+        } else {
+            None
+        }
+    };
+    if let Some((day, n)) = flush {
+        if let Some(storage) = app.try_state::<Storage>() {
+            let _ = storage.add_tracker_sightings(day, n);
+        }
+    }
 }
 
 /// Record an outbound search provider call. The URL logged is the

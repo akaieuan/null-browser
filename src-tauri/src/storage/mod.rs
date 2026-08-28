@@ -325,14 +325,15 @@ impl Storage {
         rows.collect()
     }
 
-    /// Count one tracker sighting against today (UTC day). Aggregate
-    /// only — the day and a running count, never which tracker or when.
-    pub fn record_tracker_sighting(&self, day: i64) -> rusqlite::Result<()> {
+    /// Add `n` tracker sightings to a day (UTC). Aggregate only — the
+    /// day and a running count, never which tracker or when. Called in
+    /// batches, not once per request (see `network::note_tracker_sighting`).
+    pub fn add_tracker_sightings(&self, day: i64, n: i64) -> rusqlite::Result<()> {
         let conn = self.conn();
         conn.execute(
-            "INSERT INTO tracker_sightings (day, count) VALUES (?1, 1)
-             ON CONFLICT(day) DO UPDATE SET count = count + 1",
-            params![day],
+            "INSERT INTO tracker_sightings (day, count) VALUES (?1, ?2)
+             ON CONFLICT(day) DO UPDATE SET count = count + ?2",
+            params![day, n],
         )?;
         Ok(())
     }

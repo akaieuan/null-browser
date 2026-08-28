@@ -13,7 +13,12 @@ pub fn list_network_events(state: State<NetworkState>) -> Vec<NetworkEvent> {
 
 /// Home's data-movement graph: one row per UTC day that saw a tracker.
 #[tauri::command]
-pub fn list_tracker_sightings(storage: State<Storage>) -> Result<Vec<TrackerDay>, String> {
+pub fn list_tracker_sightings(
+    app: AppHandle,
+    storage: State<Storage>,
+) -> Result<Vec<TrackerDay>, String> {
+    // Push the in-memory buffer to disk first, so the graph is current.
+    crate::network::flush_tracker_sightings(&app);
     storage.list_tracker_sightings().map_err(|e| e.to_string())
 }
 

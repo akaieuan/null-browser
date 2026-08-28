@@ -77,11 +77,13 @@ export function TrackerGraph() {
     );
 
     // A month label sits over the first column whose Sunday is in a
-    // month the previous column wasn't.
+    // month the previous column wasn't. UTC throughout: `day` is a UTC
+    // day index, so reading it back with local accessors would shift
+    // every boundary a day west of UTC.
     const months: { label: string; left: number }[] = [];
     let prev = -1;
     weeks.forEach((col, w) => {
-      const m = new Date(col[0].day * DAY_MS).getMonth();
+      const m = new Date(col[0].day * DAY_MS).getUTCMonth();
       if (m !== prev) {
         months.push({ label: MONTHS[m], left: w * COL });
         prev = m;
@@ -91,11 +93,8 @@ export function TrackerGraph() {
     const total = rows
       .filter((r) => r.day >= start)
       .reduce((sum, r) => sum + r.count, 0);
-    const busiest = rows
-      .filter((r) => r.day >= start)
-      .reduce((max, r) => Math.max(max, r.count), 0);
 
-    return { weeks, months, total, busiest };
+    return { weeks, months, total };
   }, [rows]);
 
   // Nothing to show until the first sighting — a fresh install opens on
@@ -181,7 +180,10 @@ export function TrackerGraph() {
                         }}
                         title={`${cell.count} tracker${
                           cell.count === 1 ? "" : "s"
-                        } · ${new Date(cell.day * DAY_MS).toLocaleDateString()}`}
+                        } · ${new Date(cell.day * DAY_MS).toLocaleDateString(
+                          undefined,
+                          { timeZone: "UTC" },
+                        )}`}
                       />
                     ),
                   )}
