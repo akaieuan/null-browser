@@ -62,6 +62,13 @@ export type Favicon = {
   data: string;
 };
 
+/** One day's tracker-sighting count. `day` is days since the Unix
+    epoch, UTC. */
+export type TrackerDay = {
+  day: number;
+  count: number;
+};
+
 export type SearchResult = {
   title: string;
   url: string;
@@ -140,6 +147,8 @@ export const ipc = {
   adBlockingEnabled: () => invoke<boolean>("ad_blocking_enabled"),
   setAdBlocking: (enabled: boolean) =>
     invoke<void>("set_ad_blocking", { enabled }),
+  listTrackerSightings: () =>
+    invoke<TrackerDay[]>("list_tracker_sightings"),
 
   listArtifacts: () => invoke<Artifact[]>("list_artifacts"),
   getArtifact: (id: number) => invoke<Artifact>("get_artifact", { id }),

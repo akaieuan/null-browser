@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { EmptyState } from "@/components/panels/EmptyState";
+import { TrackerGraph } from "@/components/TrackerGraph";
 import { Kicker } from "@/components/ui/atoms";
 import { ipc, type Artifact } from "@/lib/ipc";
 
@@ -13,10 +14,15 @@ import { ipc, type Artifact } from "@/lib/ipc";
  * destinations. What the sidebar lists but cannot show inline is clips —
  * and clips are the one thing in Null you deliberately made.
  *
- * Deliberately absent: any counter. A number that ticks upward while you
- * look at it is a dashboard element however privacy-flavoured the
- * framing, and the network event log is a capped in-memory ring that
- * resets each launch, so it could not honestly carry the word "today".
+ * One number does belong here: the trackers-seen calendar. The old
+ * objection to a counter was that a figure ticking upward as you watch
+ * is a dashboard element, and that the in-memory event ring could not
+ * honestly say "today". A retrospective calendar answers both — it is a
+ * record, not a live tally, and it reads from a persisted per-day table
+ * (migration 010), so every cell is a real day. And it is honest about
+ * itself: it counts trackers the browser *saw*, which blocking makes
+ * fall, not blocks (which are uncountable). It hides itself until there
+ * is a first sighting, so a fresh install still opens on the notes.
  */
 export function Home({
   onOpenClip,
@@ -40,6 +46,10 @@ export function Home({
     // notes are objects on it.
     <div className="absolute inset-0 overflow-y-auto">
       <div className="mx-auto max-w-3xl px-8 pb-20 pt-16">
+        {/* Self-hides until the first tracker sighting, and carries its
+            own trailing gap so a fresh install opens straight on Notes
+            with no empty band above them. */}
+        <TrackerGraph />
         <Kicker>Notes</Kicker>
         {clips.length === 0 ? (
           <div className="mt-4 max-w-md rounded-xl bg-card p-5">

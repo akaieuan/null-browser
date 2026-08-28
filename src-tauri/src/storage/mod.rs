@@ -50,6 +50,14 @@ pub struct Favicon {
     pub data: String,
 }
 
+/// One day's tracker-sighting count. `day` is days since the Unix
+/// epoch, UTC.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrackerDay {
+    pub day: i64,
+    pub count: i64,
+}
+
 /// A saved page summary (or later: other kinds of saved AI outputs).
 /// Lives on disk, openable inside the AI drawer next to chat.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -312,6 +320,32 @@ impl Storage {
             Ok(Favicon {
                 origin: row.get(0)?,
                 data: row.get(1)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    /// Count one tracker sighting against today (UTC day). Aggregate
+    /// only — the day and a running count, never which tracker or when.
+    pub fn record_tracker_sighting(&self, day: i64) -> rusqlite::Result<()> {
+        let conn = self.conn();
+        conn.execute(
+            "INSERT INTO tracker_sightings (day, count) VALUES (?1, 1)
+             ON CONFLICT(day) DO UPDATE SET count = count + 1",
+            params![day],
+        )?;
+        Ok(())
+    }
+
+    /// Every day that has a sighting, oldest first. The empty days
+    /// between are the graph's business to fill, not the store's.
+    pub fn list_tracker_sightings(&self) -> rusqlite::Result<Vec<TrackerDay>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare("SELECT day, count FROM tracker_sightings ORDER BY day ASC")?;
+        let rows = stmt.query_map([], |row| {
+            Ok(TrackerDay {
+                day: row.get(0)?,
+                count: row.get(1)?,
             })
         })?;
         rows.collect()

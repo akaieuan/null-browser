@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 //
-// null-list.txt -> src-tauri/src/blocklist/ads.json
+// null-list.txt -> src-tauri/src/blocklist/ads.json   (WebKit rules)
+//                  src-tauri/src/blocklist/domains.json (runtime classifier)
 //
 // Zero dependencies, like scripts/ui/cdp.mjs: Node's own standard
 // library is enough, so nothing is added to package.json and nothing
@@ -20,6 +21,10 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, '../..');
 const SOURCE = path.join(HERE, 'null-list.txt');
 const OUT = path.join(REPO, 'src-tauri/src/blocklist/ads.json');
+// The same hosts as a plain sorted array. The rule JSON is for WebKit;
+// this is for the observer, which classifies an already-loaded request
+// against the list to count trackers seen (Home's data-movement graph).
+const DOMAINS_OUT = path.join(REPO, 'src-tauri/src/blocklist/domains.json');
 
 // Resource types the bundled list refuses. `document` is deliberately
 // absent: a main-frame navigation must stay on the visible
@@ -105,3 +110,7 @@ if (hosts.length > MAX_RULES) {
 fs.mkdirSync(path.dirname(OUT), { recursive: true });
 fs.writeFileSync(OUT, `${JSON.stringify(hosts.map(rule), null, 2)}\n`);
 console.log(`${path.relative(REPO, OUT)}: ${hosts.length} rules`);
+
+const sorted = [...hosts].sort();
+fs.writeFileSync(DOMAINS_OUT, `${JSON.stringify(sorted, null, 0)}\n`);
+console.log(`${path.relative(REPO, DOMAINS_OUT)}: ${sorted.length} domains`);

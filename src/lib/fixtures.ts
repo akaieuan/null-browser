@@ -181,6 +181,22 @@ export function fixtureFor(cmd: string, args?: Record<string, unknown>): unknown
     case "network_is_paused": return false;
     case "ad_blocking_enabled": return false;
     case "set_ad_blocking": return null;
+    case "list_tracker_sightings": {
+      // A full year of deterministic daily counts so the calendar fills
+      // the way the real one will after a year of use.
+      const today = Math.floor(now / 86400);
+      const days: { day: number; count: number }[] = [];
+      for (let i = 0; i < 364; i++) {
+        const d = today - i;
+        const wknd = ((d % 7) + 7) % 7 < 2;
+        const base = (d * 2654435761) >>> 0;
+        const n = base % 42;
+        // Weekends quieter, ~1 in 8 days a clean zero.
+        const count = base % 8 === 0 ? 0 : wknd ? Math.floor(n / 4) : n;
+        if (count > 0) days.push({ day: d, count });
+      }
+      return days.reverse();
+    }
     case "get_notes_dir": return "/Users/you/Documents/Null";
     case "get_favicons": return [];
     case "create_note":

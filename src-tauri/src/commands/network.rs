@@ -4,11 +4,17 @@ use tauri::{AppHandle, State};
 
 use crate::blocklist;
 use crate::network::{NetworkEvent, NetworkState};
-use crate::storage::{BlockedOrigin, Storage};
+use crate::storage::{BlockedOrigin, Storage, TrackerDay};
 
 #[tauri::command]
 pub fn list_network_events(state: State<NetworkState>) -> Vec<NetworkEvent> {
     state.list()
+}
+
+/// Home's data-movement graph: one row per UTC day that saw a tracker.
+#[tauri::command]
+pub fn list_tracker_sightings(storage: State<Storage>) -> Result<Vec<TrackerDay>, String> {
+    storage.list_tracker_sightings().map_err(|e| e.to_string())
 }
 
 #[tauri::command]

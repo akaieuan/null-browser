@@ -111,6 +111,10 @@ The list is written in this repository, by hand. Nothing in it is imported from 
 
 One caveat worth setting expectations on: this does not clear YouTube's ads. YouTube serves them from the same hosts as the video itself, and no hostname list can separate the two. What it does remove is the tracking and the display advertising on the rest of the web.
 
+### Trackers seen
+
+The new-tab surface carries a GitHub-style calendar of **trackers seen** — one cell per day, shaded by how many requests to known tracker hosts the browser observed that day. It is honest about what it counts: requests that *loaded*, not ones that were blocked. A blocked request never reaches the observer (it dies in WebKit before a connection opens, which is why blocked requests are invisible to the inspector too), so switching blocking on makes the graph fall. It reads as exposure, and the drop is the blocker working — not a scoreboard of blocks, which are by design uncountable. The data is a per-day integer in SQLite (migration 010): a count and a date, never which tracker or when, so it holds far less than history already does. The graph hides itself until the first sighting, so a fresh install still opens on your notes.
+
 ### Notes
 
 Notes is a place you *write*, next to whatever you're watching. `⌘N` creates a note and drops the card in on the right — title, then a full-height markdown body that autosaves as you type (600ms debounce, flushed on close). The page yields the width rather than being covered; one control widens the card to a half-window split. A note created while a page is open carries that page's URL as its source line, so notes taken on a video keep their way back to the video. The eye toggles a rendered preview; `Esc` blurs the field first, closes the card second.

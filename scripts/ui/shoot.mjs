@@ -27,7 +27,7 @@ const PALETTES = [
 ];
 
 const STATES = [
-  ['01-home', 'Home', 'Six most recent notes on the content card. Bookmarks and history already live in the sidebar.'],
+  ['01-home', 'Home', 'A calendar of trackers seen sits above the recent notes: one cell per day, shaded by how many tracker requests the browser observed — a record of exposure, not a scoreboard of blocks.'],
   ['02-notes', 'Notes', 'A card dropped in from the toolbar: the page yields the width, the gutter separates them, and one control widens it to a half-window split.'],
   ['02b-note-viewer', 'Note', 'Markdown, rendered. The heading is dropped from the body because the header already carries it.'],
   ['03-history', 'History', 'Header and body share one measure, so the panel has a single left edge and a single right edge.'],

@@ -248,6 +248,7 @@ pub fn run() {
             commands::history::remove_history,
             commands::history::clear_history,
             commands::network::list_network_events,
+            commands::network::list_tracker_sightings,
             commands::network::clear_network_events,
             commands::network::set_network_paused,
             commands::network::network_is_paused,

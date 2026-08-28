@@ -145,6 +145,18 @@ pub fn record_subresource(app: &AppHandle, url_str: &str, initiator: &str) {
         .and_then(|s| s.is_origin_blocked(&origin).ok())
         .unwrap_or(false);
 
+    // A tracker the observer saw is one that loaded — count it against
+    // today for Home's graph. With ad blocking on, trackers are stopped
+    // in WebKit and never reach here, so the count falls: it measures
+    // exposure, not blocks (which are, by design, uncountable).
+    if let Some(host) = url.host_str() {
+        if crate::blocklist::is_tracker_host(host) {
+            if let Some(storage) = app.try_state::<Storage>() {
+                let _ = storage.record_tracker_sighting(utc_day());
+            }
+        }
+    }
+
     let event = NetworkEvent {
         id: 0,
         tab_id: None,
@@ -160,6 +172,13 @@ pub fn record_subresource(app: &AppHandle, url_str: &str, initiator: &str) {
             let _ = app.emit_to(EventTarget::webview("main"), NETWORK_EVENT, &recorded);
         }
     }
+}
+
+/// Today as days since the Unix epoch, UTC. The graph is a calendar,
+/// so day granularity is all it needs; UTC keeps it dependency-free at
+/// the cost of a cell boundary that is not the viewer's local midnight.
+fn utc_day() -> i64 {
+    now_secs() / 86_400
 }
 
 /// Record an outbound search provider call. The URL logged is the

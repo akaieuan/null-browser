@@ -30,6 +30,46 @@ use serde_json::{json, Value};
 /// compiles it into WebKit.
 pub const ADS_JSON: &str = include_str!("ads.json");
 
+/// The same hosts as a flat array, for classifying a request the
+/// observer already saw. Blocking hides trackers from the observer, so
+/// this powers a "seen" count, not a "blocked" one — the two are
+/// different by design (`docs/PHILOSOPHY.md`).
+const AD_DOMAINS_JSON: &str = include_str!("domains.json");
+
+/// The tracker host set, parsed once. A miss is the common case (most
+/// requests are first-party), so an owned `HashSet` lookup per parent
+/// domain is the right shape.
+fn tracker_hosts() -> &'static std::collections::HashSet<String> {
+    use std::sync::OnceLock;
+    static SET: OnceLock<std::collections::HashSet<String>> = OnceLock::new();
+    SET.get_or_init(|| {
+        serde_json::from_str::<Vec<String>>(AD_DOMAINS_JSON)
+            .unwrap_or_default()
+            .into_iter()
+            .collect()
+    })
+}
+
+/// Is this host a tracker, or a subdomain of one? Walks the parent
+/// domains (`stats.g.doubleclick.net` → `g.doubleclick.net` →
+/// `doubleclick.net`, a hit) and checks each against the set. The set
+/// only ever holds registrable tracker domains, never a bare TLD, so
+/// walking parents can never widen to "all of .net".
+pub fn is_tracker_host(host: &str) -> bool {
+    let host = host.strip_prefix("www.").unwrap_or(host);
+    let set = tracker_hosts();
+    let mut rest = host;
+    loop {
+        if set.contains(rest) {
+            return true;
+        }
+        match rest.split_once('.') {
+            Some((_, tail)) if tail.contains('.') => rest = tail,
+            _ => return false,
+        }
+    }
+}
+
 /// Settings key holding `"true"` / `"false"`. Absent means off.
 pub const SETTING_KEY: &str = "ad_blocking";
 
@@ -488,6 +528,23 @@ mod tests {
             "^https?://([a-z0-9_-]+\\.)*ads\\.example\\.com[:/]"
         );
         assert_eq!(rule["action"]["type"], "block");
+    }
+
+    #[test]
+    fn tracker_host_matches_domain_and_subdomains() {
+        assert!(is_tracker_host("doubleclick.net"));
+        assert!(is_tracker_host("stats.g.doubleclick.net"));
+        assert!(is_tracker_host("www.doubleclick.net"));
+    }
+
+    #[test]
+    fn tracker_host_ignores_first_party_and_bare_tlds() {
+        assert!(!is_tracker_host("example.com"));
+        assert!(!is_tracker_host("net"));
+        assert!(!is_tracker_host("notdoubleclick.net"));
+        // A lookalike that merely ends in a tracker label is not a
+        // subdomain of it.
+        assert!(!is_tracker_host("doubleclick.net.evil.com"));
     }
 
     #[test]

@@ -7,7 +7,7 @@
 
 use rusqlite::Connection;
 
-const LATEST: i64 = 9;
+const LATEST: i64 = 10;
 
 pub fn run(conn: &mut Connection) -> rusqlite::Result<()> {
     let current: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
@@ -22,6 +22,7 @@ pub fn run(conn: &mut Connection) -> rusqlite::Result<()> {
             7 => MIGRATION_007,
             8 => MIGRATION_008,
             9 => MIGRATION_009,
+            10 => MIGRATION_010,
             _ => unreachable!("no migration defined for version {version}"),
         };
         let tx = conn.transaction()?;
@@ -168,4 +169,18 @@ const MIGRATION_008: &str = r#"
 const MIGRATION_009: &str = r#"
     ALTER TABLE artifacts ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0;
     UPDATE artifacts SET updated_at = created_at;
+"#;
+
+/// Tracker sightings per day, for Home's data-movement graph. One row
+/// per UTC day, counting requests the observer saw reaching a known
+/// tracker host. It is a count of what *loaded*, not what was blocked —
+/// blocking hides trackers from the observer entirely, so the graph
+/// reads as exposure, and turning blocking on makes it fall. Local and
+/// aggregate: a daily integer, never a URL or a timestamp, so it holds
+/// far less than `history` already does.
+const MIGRATION_010: &str = r#"
+    CREATE TABLE tracker_sightings (
+        day    INTEGER PRIMARY KEY,
+        count  INTEGER NOT NULL
+    );
 "#;
