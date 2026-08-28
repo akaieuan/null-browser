@@ -543,10 +543,32 @@ pub fn set_corner_radius(app: &AppHandle, radius: f64) {
 pub fn close_tab(app: &AppHandle, tab_id: &str) -> Result<(), String> {
     let label = tab_label(tab_id);
     if let Some(webview) = app.get_webview(&label) {
+        // Stop media before tearing the webview down. WKWebView runs
+        // media in a separate process, and `close()` alone can leave a
+        // playing video's audio going right through the teardown — a
+        // closed tab you can still hear. Both calls dispatch onto the
+        // main thread in order, so the pause lands before the close.
+        stop_media(&webview);
         webview.close().map_err(s)?;
     }
     Ok(())
 }
+
+/// Pause every audio/video element in a tab, called just before the
+/// tab closes. `pauseAllMediaPlaybackWithCompletionHandler` is
+/// WebKit's own "stop everything", more thorough than pausing DOM
+/// elements from script (it reaches media the page holds outside the
+/// document too).
+#[cfg(target_os = "macos")]
+fn stop_media(webview: &tauri::Webview) {
+    let _ = webview.with_webview(|pw| unsafe {
+        let wk: &objc2_web_kit::WKWebView = &*(pw.inner() as *const objc2_web_kit::WKWebView);
+        wk.pauseAllMediaPlaybackWithCompletionHandler(None);
+    });
+}
+
+#[cfg(not(target_os = "macos"))]
+fn stop_media(_webview: &tauri::Webview) {}
 
 /// Show the given tab; hide every other tab.
 pub fn activate(app: &AppHandle, tab_id: &str) -> Result<(), String> {
