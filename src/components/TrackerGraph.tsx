@@ -97,9 +97,11 @@ export function TrackerGraph() {
     return { weeks, months, total };
   }, [rows]);
 
-  // Nothing to show until the first sighting — a fresh install opens on
-  // the notes, not an empty grid asking to be filled.
-  if (!model || model.total === 0) return null;
+  // Render nothing only while the first read is in flight — once it
+  // resolves the graph is always on Home, empty grid and all, so the
+  // feature is visible from the first launch and fills as you browse.
+  if (!model) return null;
+  const empty = model.total === 0;
 
   const gridWidth = WEEKS * COL - GAP;
 
@@ -108,14 +110,22 @@ export function TrackerGraph() {
       <div className="flex items-end justify-between gap-4">
         <div>
           <Kicker>Trackers seen</Kicker>
-          <div className="mt-2 flex items-baseline gap-2">
-            <span className="text-3xl font-light tabular-nums leading-none text-foreground">
-              {model.total.toLocaleString()}
-            </span>
-            <span className="text-xs text-muted-foreground">
-              this year · blocking makes it fall
-            </span>
-          </div>
+          {empty ? (
+            <p className="mt-2 max-w-sm text-xs font-light leading-relaxed text-muted-foreground">
+              Nothing yet — this fills as you browse, counting requests to
+              known trackers the browser sees. Blocking (Settings → Blocking)
+              keeps it low.
+            </p>
+          ) : (
+            <div className="mt-2 flex items-baseline gap-2">
+              <span className="text-3xl font-light tabular-nums leading-none text-foreground">
+                {model.total.toLocaleString()}
+              </span>
+              <span className="text-xs text-muted-foreground">
+                this year · blocking makes it fall
+              </span>
+            </div>
+          )}
         </div>
         <div className="flex shrink-0 items-center gap-1.5 pb-0.5 text-[10px] text-muted-foreground">
           <span>Less</span>

@@ -1,3 +1,4 @@
+import { Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { EmptyState } from "@/components/panels/EmptyState";
@@ -39,6 +40,13 @@ export function Home({
     ipc.getNotesDir().then(setNotesDir).catch(() => {});
   }, []);
 
+  const removeClip = (id: number) => {
+    // Optimistic: the row leaves at once; the backend keeps an
+    // externally-edited file (notes::delete_note's guard).
+    setClips((xs) => xs.filter((c) => c.id !== id));
+    ipc.deleteArtifact(id).catch(() => {});
+  };
+
   return (
     // No Card wrapper: the fresh tab is the one surface that sits
     // directly on the glass. Each note is its own small card, so the
@@ -74,6 +82,7 @@ export function Home({
                 delayMs={i * 24}
                 onOpen={() => onOpenClip(c)}
                 onOpenSource={() => onOpenUrl(c.source_url)}
+                onDelete={() => removeClip(c.id)}
               />
             ))}
           </div>
@@ -88,12 +97,14 @@ function HomeClipCard({
   delayMs,
   onOpen,
   onOpenSource,
+  onDelete,
 }: {
   clip: Artifact;
   /** Stagger within the grid, in milliseconds. */
   delayMs: number;
   onOpen: () => void;
   onOpenSource: () => void;
+  onDelete: () => void;
 }) {
   const host = useMemo(() => {
     try {
@@ -104,31 +115,45 @@ function HomeClipCard({
   }, [clip.source_url]);
   const when = useMemo(() => relativeTime(clip.created_at), [clip.created_at]);
 
+  // A wrapper holds two siblings — the open button and the delete
+  // button — rather than nesting one inside the other (invalid, and it
+  // would swallow the delete click). The wrapper carries the entrance
+  // and the hover-lift so the trash rides along with the card. See the
+  // NoteRow in NotesPanel for the same shape in the list.
   return (
-    <button
-      type="button"
-      onClick={(e) => (e.metaKey ? onOpenSource() : onOpen())}
-      title={`${clip.title}\n${clip.source_url}\n⌘-click to open the source`}
-      // Hover moves space, not brightness: the card lifts a step.
-      //
-      // The entrance is the same idea at rest. `backwards`, not `both`:
-      // backwards holds the card at its start offset through the
-      // stagger delay (without it, a late card paints in place and then
-      // jumps back to animate), while a forwards fill would keep
-      // overriding `transform` after it lands and kill the hover lift.
-      className="flex min-h-[104px] flex-col justify-between rounded-xl bg-card p-4 text-left transition-transform focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring motion-safe:animate-[np-rise_160ms_ease-out_backwards] motion-safe:hover:-translate-y-0.5"
+    <div
+      className="group relative transition-transform motion-safe:animate-[np-rise_160ms_ease-out_backwards] motion-safe:hover:-translate-y-0.5"
       style={{ animationDelay: `${delayMs}ms` }}
     >
-      <span className="line-clamp-2 w-full text-sm leading-snug text-foreground">
-        {clip.title || "Untitled"}
-      </span>
-      <span className="mt-3 flex w-full items-baseline justify-between gap-2 text-[11px] text-muted-foreground">
-        <span className="min-w-0 truncate">
-          {clip.kind === "selection" ? "selection" : "page"} · {host}
+      <button
+        type="button"
+        onClick={(e) => (e.metaKey ? onOpenSource() : onOpen())}
+        title={`${clip.title}\n${clip.source_url}\n⌘-click to open the source`}
+        className="flex min-h-[104px] w-full flex-col justify-between rounded-xl bg-card p-4 text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+      >
+        <span className="line-clamp-2 w-full pr-6 text-sm leading-snug text-foreground">
+          {clip.title || "Untitled"}
         </span>
-        <span className="shrink-0 tabular-nums">{when}</span>
-      </span>
-    </button>
+        <span className="mt-3 flex w-full items-baseline justify-between gap-2 text-[11px] text-muted-foreground">
+          <span className="min-w-0 truncate">
+            {clip.kind === "selection" ? "selection" : "page"} · {host}
+          </span>
+          <span className="shrink-0 tabular-nums">{when}</span>
+        </span>
+      </button>
+      <button
+        type="button"
+        aria-label="Delete note"
+        title="Delete note"
+        onClick={(e) => {
+          e.stopPropagation();
+          onDelete();
+        }}
+        className="absolute right-2 top-2 rounded-md p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-danger focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring group-hover:opacity-100"
+      >
+        <Trash2 size={13} strokeWidth={1.5} />
+      </button>
+    </div>
   );
 }
 

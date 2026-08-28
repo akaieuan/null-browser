@@ -727,6 +727,11 @@ function SortableTile({
         // open folder takes the accent ring to mark it active.
         className={cn(
           "flex aspect-square w-full items-center justify-center rounded-xl bg-accent transition-transform duration-150 ease-out",
+          // A control edge as well as a fill: tone alone is weak in
+          // light mode, where the accent tile sits only a step off a
+          // near-white sidebar. The border gives the tile a findable
+          // outline in both modes and keeps it defined over the glass.
+          "border border-border",
           "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
           selected
             ? "ring-1 ring-select"
