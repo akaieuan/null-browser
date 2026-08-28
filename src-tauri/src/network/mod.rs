@@ -290,6 +290,16 @@ fn record_outbound(app: &AppHandle, kind: &str, endpoint: &str) {
 /// fallible by design — if state is missing or the broadcast fails, the
 /// navigation itself still proceeds.
 pub fn record_navigation(app: &AppHandle, tab_id: &str, url: &Url) -> bool {
+    // Non-web schemes are not outbound connections and are not the
+    // inspector's subject — `record_subresource` skips them for the same
+    // reason. In particular every tab is now built at `about:blank` and
+    // navigated to its real URL a moment later (so the content rule lists
+    // are attached before the first request), and that placeholder must
+    // not show up as a row. Allowed, not blocked: refusing here would
+    // cancel the very navigation that opens a tab.
+    if !matches!(url.scheme(), "http" | "https") {
+        return true;
+    }
     let origin = origin_of(url);
     let blocked = app
         .try_state::<Storage>()

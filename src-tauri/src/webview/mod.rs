@@ -313,120 +313,144 @@ pub fn create_tab(
     let nav_app = app.clone();
     let popup_app = app.clone();
     let dl_app = app.clone();
-    let builder = WebviewBuilder::new(&label, WebviewUrl::External(url))
-        .user_agent(USER_AGENT)
-        .initialization_script(OBSERVER_SCRIPT)
-        .on_navigation(move |url| network::record_navigation(&nav_app, &nav_id, url))
-        // window.open / target=_blank. Before this handler existed the
-        // request was silently dropped — which is why every OAuth
-        // dialog and captcha popup "just stalled". Two shapes:
-        //
-        // * A sized request is a JS popup (login dialogs, captcha
-        //   frames). It needs the real WebKit popup machinery —
-        //   window.opener, postMessage back to the page — so it gets an
-        //   actual small window, built on the exact WKWebViewConfiguration
-        //   WebKit handed us (that linkage IS the opener relationship).
-        // * An unsized request is a plain "open this elsewhere":
-        //   that's a tab, routed through the shell.
-        .on_new_window(move |url, features| {
-            if !matches!(url.scheme(), "http" | "https") {
-                return NewWindowResponse::Deny;
-            }
-            if features.size().is_none() {
-                let _ =
-                    popup_app.emit_to(EventTarget::webview("main"), "open-url", url.to_string());
-                return NewWindowResponse::Deny;
-            }
-            #[cfg(target_os = "macos")]
-            let config = features.opener().target_configuration.clone();
-            let n = POPUP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            let popup_label = format!("popup-{n}");
-            #[allow(unused_mut)]
-            let mut b = tauri::WebviewWindowBuilder::new(
-                &popup_app,
-                &popup_label,
-                WebviewUrl::External("about:blank".parse().expect("about:blank parses")),
-            )
-            .title(url.as_str())
-            .window_features(features)
-            .on_document_title_changed(|window, title| {
-                let _ = window.set_title(&title);
-            });
-            #[cfg(target_os = "macos")]
-            {
-                b = b.with_webview_configuration(config);
-            }
-            match b.build() {
-                Ok(window) => {
-                    // A popup gets its own WKUserContentController, so
-                    // it needs the rule lists handed to it separately —
-                    // it inherits nothing from the tab that opened it.
-                    crate::blocklist::attach_window(&window);
-                    NewWindowResponse::Create { window }
-                }
-                Err(_) => NewWindowResponse::Deny,
-            }
-        })
-        // Downloads land in ~/Downloads under a collision-free name;
-        // the shell shows start/finish. Refusing when the Downloads
-        // directory cannot be resolved beats writing somewhere silent.
-        .on_download(move |_webview, event| match event {
-            DownloadEvent::Requested { url, destination } => {
-                let Some(dir) = directories::UserDirs::new()
-                    .and_then(|u| u.download_dir().map(|p| p.to_path_buf()))
-                else {
-                    return false;
-                };
-                let suggested = destination
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .filter(|n| !n.is_empty())
-                    .or_else(|| {
-                        url.path_segments()
-                            .and_then(|mut s| s.next_back())
-                            .filter(|s| !s.is_empty())
-                            .map(|s| s.to_string())
-                    })
-                    .unwrap_or_else(|| "download".to_string());
-                let path = unique_download_path(&dir, &sanitize_filename(&suggested));
-                let name = path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_default();
-                *destination = path;
-                let _ = dl_app.emit_to(
-                    EventTarget::webview("main"),
-                    "download-started",
-                    serde_json::json!({ "name": name, "url": url.to_string() }),
-                );
-                true
-            }
-            DownloadEvent::Finished { url, success, .. } => {
-                let _ = dl_app.emit_to(
-                    EventTarget::webview("main"),
-                    "download-finished",
-                    serde_json::json!({ "url": url.to_string(), "success": success }),
-                );
-                true
-            }
-            _ => true,
-        })
-        .on_page_load(move |webview, payload| {
-            let url_string = payload.url().to_string();
-            let app = webview.app_handle();
-            let state = match payload.event() {
-                PageLoadEvent::Started => "started",
-                PageLoadEvent::Finished => "finished",
-            };
-            let _ = app.emit_to(
-                EventTarget::webview("main"),
-                TAB_LOAD_STATE,
-                serde_json::json!({ "id": &emit_id, "state": state, "url": &url_string }),
-            );
-            if matches!(payload.event(), PageLoadEvent::Finished) {
-                emit_tab_updated(&webview, &emit_id, &url_string);
-            }
+    // Built blank, navigated below — NOT built at `url`.
+    //
+    // `WKContentRuleList` only filters requests issued after the list is
+    // on the content controller, and the list can only be attached once
+    // the webview exists. A builder carrying the destination starts that
+    // navigation inside `add_child`, so the first page's ad and tracker
+    // requests were already in flight before `blocklist::attach` ran —
+    // the initial load went unfiltered and only a reload was blocked.
+    // Opening blank costs one extra navigate and makes the first real
+    // navigation identical to every later one, which is the path that
+    // was already provably filtered. `url` is still validated above, so
+    // the http/https allowlist is unchanged.
+    let builder = WebviewBuilder::new(
+        &label,
+        WebviewUrl::External("about:blank".parse().expect("about:blank parses")),
+    )
+    .user_agent(USER_AGENT)
+    .initialization_script(OBSERVER_SCRIPT)
+    .on_navigation(move |url| network::record_navigation(&nav_app, &nav_id, url))
+    // window.open / target=_blank. Before this handler existed the
+    // request was silently dropped — which is why every OAuth
+    // dialog and captcha popup "just stalled". Two shapes:
+    //
+    // * A sized request is a JS popup (login dialogs, captcha
+    //   frames). It needs the real WebKit popup machinery —
+    //   window.opener, postMessage back to the page — so it gets an
+    //   actual small window, built on the exact WKWebViewConfiguration
+    //   WebKit handed us (that linkage IS the opener relationship).
+    // * An unsized request is a plain "open this elsewhere":
+    //   that's a tab, routed through the shell.
+    .on_new_window(move |url, features| {
+        if !matches!(url.scheme(), "http" | "https") {
+            return NewWindowResponse::Deny;
+        }
+        if features.size().is_none() {
+            let _ = popup_app.emit_to(EventTarget::webview("main"), "open-url", url.to_string());
+            return NewWindowResponse::Deny;
+        }
+        #[cfg(target_os = "macos")]
+        let config = features.opener().target_configuration.clone();
+        let n = POPUP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let popup_label = format!("popup-{n}");
+        #[allow(unused_mut)]
+        let mut b = tauri::WebviewWindowBuilder::new(
+            &popup_app,
+            &popup_label,
+            WebviewUrl::External("about:blank".parse().expect("about:blank parses")),
+        )
+        .title(url.as_str())
+        .window_features(features)
+        .on_document_title_changed(|window, title| {
+            let _ = window.set_title(&title);
         });
+        #[cfg(target_os = "macos")]
+        {
+            b = b.with_webview_configuration(config);
+        }
+        match b.build() {
+            Ok(window) => {
+                // A popup gets its own WKUserContentController, so
+                // it needs the rule lists handed to it separately —
+                // it inherits nothing from the tab that opened it.
+                crate::blocklist::attach_window(&window);
+                NewWindowResponse::Create { window }
+            }
+            Err(_) => NewWindowResponse::Deny,
+        }
+    })
+    // Downloads land in ~/Downloads under a collision-free name;
+    // the shell shows start/finish. Refusing when the Downloads
+    // directory cannot be resolved beats writing somewhere silent.
+    .on_download(move |_webview, event| match event {
+        DownloadEvent::Requested { url, destination } => {
+            let Some(dir) = directories::UserDirs::new()
+                .and_then(|u| u.download_dir().map(|p| p.to_path_buf()))
+            else {
+                return false;
+            };
+            let suggested = destination
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .filter(|n| !n.is_empty())
+                .or_else(|| {
+                    url.path_segments()
+                        .and_then(|mut s| s.next_back())
+                        .filter(|s| !s.is_empty())
+                        .map(|s| s.to_string())
+                })
+                .unwrap_or_else(|| "download".to_string());
+            let path = unique_download_path(&dir, &sanitize_filename(&suggested));
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            *destination = path;
+            let _ = dl_app.emit_to(
+                EventTarget::webview("main"),
+                "download-started",
+                serde_json::json!({ "name": name, "url": url.to_string() }),
+            );
+            true
+        }
+        DownloadEvent::Finished { url, success, .. } => {
+            let _ = dl_app.emit_to(
+                EventTarget::webview("main"),
+                "download-finished",
+                serde_json::json!({ "url": url.to_string(), "success": success }),
+            );
+            true
+        }
+        _ => true,
+    })
+    .on_page_load(move |webview, payload| {
+        let url_string = payload.url().to_string();
+        // The blank page every tab is built at, before it is navigated
+        // to the real URL (see the builder above). It is scaffolding,
+        // not a visit: TAB_UPDATED writes a history row and sets the
+        // tab's title, so emitting for it would put an `about:blank`
+        // row in History and flash a blank title before the real page
+        // arrives. The load-state ping is skipped with it — the real
+        // navigation's own "started" is what should light the spinner.
+        if url_string.starts_with("about:blank") {
+            return;
+        }
+        let app = webview.app_handle();
+        let state = match payload.event() {
+            PageLoadEvent::Started => "started",
+            PageLoadEvent::Finished => "finished",
+        };
+        let _ = app.emit_to(
+            EventTarget::webview("main"),
+            TAB_LOAD_STATE,
+            serde_json::json!({ "id": &emit_id, "state": state, "url": &url_string }),
+        );
+        if matches!(payload.event(), PageLoadEvent::Finished) {
+            emit_tab_updated(&webview, &emit_id, &url_string);
+        }
+    });
 
     let webview = window
         .add_child(
@@ -437,10 +461,17 @@ pub fn create_tab(
         .map_err(s)?;
 
     round_corners(&webview);
-    // Before the first request goes out: a webview built without its
-    // rule lists would load a page's trackers once and only start
-    // blocking on the navigation after.
+    // Before the first request goes out — which is now true, because the
+    // webview above opened blank and the navigation below is what fetches
+    // the page. A webview built at its destination would have loaded that
+    // page's trackers once and only started blocking on the next
+    // navigation.
     crate::blocklist::attach(&webview);
+
+    // The real navigation, filtered by the lists just attached. Same call
+    // the URL bar and reload use, so a tab's first load and every later
+    // one now take one path.
+    webview.navigate(url).map_err(s)?;
 
     Ok(())
 }
