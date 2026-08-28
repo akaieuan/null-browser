@@ -12,6 +12,7 @@ import {
 
 import { EmptyState } from "@/components/panels/EmptyState";
 import { Panel } from "@/components/panels/Panel";
+import { Kicker } from "@/components/ui/atoms";
 import { ipc, type NetworkEvent } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 
@@ -164,7 +165,7 @@ function OriginGroup({
         <button
           type="button"
           onClick={onToggle}
-          className="flex min-w-0 flex-1 items-center gap-3 text-left"
+          className="flex min-w-0 flex-1 items-center gap-3 rounded-sm text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
         >
           {expanded ? (
             <ChevronDown
@@ -227,14 +228,15 @@ function OriginGroup({
             .reverse()
             .map((e) => (
               <div key={e.id} className="flex items-start gap-3 py-1">
-                <span
+                <Kicker
+                  as="span"
                   className={cn(
-                    "mt-0.5 shrink-0 font-mono text-[10px] font-medium uppercase tracking-[0.14em]",
+                    "mt-0.5 shrink-0",
                     e.blocked ? "text-danger" : "text-subtle",
                   )}
                 >
                   {e.blocked ? "blocked" : e.kind}
-                </span>
+                </Kicker>
                 <span
                   className={cn(
                     "min-w-0 flex-1 break-all text-xs",
@@ -267,7 +269,7 @@ function ActionButton({
     <button
       type="button"
       onClick={onClick}
-      className="flex items-center gap-1.5 rounded-sm px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+      className="flex items-center gap-1.5 rounded-sm px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
     >
       {children}
     </button>

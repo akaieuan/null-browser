@@ -175,7 +175,7 @@ function NavRow({
       <span
         aria-hidden="true"
         className={cn(
-          "absolute left-0 top-1 bottom-1 w-0.5 origin-center rounded-full bg-select transition-transform duration-150 ease-out",
+          "absolute left-0 top-1 bottom-1 w-0.5 origin-center rounded-full bg-select motion-safe:transition-transform duration-150 ease-out",
           selected ? "scale-y-100" : "scale-y-0",
         )}
       />

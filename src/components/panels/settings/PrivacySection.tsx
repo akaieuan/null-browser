@@ -56,6 +56,7 @@ export function PrivacySection() {
             onClick={clearBrowsingData}
             className={cn(
               "flex items-center gap-2 rounded-md border px-3 py-1.5 text-xs transition-colors",
+              "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
               clearState === "confirm"
                 ? "border-danger text-danger"
                 : "border-border text-muted-foreground hover:bg-muted hover:text-foreground",

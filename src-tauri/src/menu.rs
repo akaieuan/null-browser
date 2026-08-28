@@ -10,13 +10,11 @@
 use tauri::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Emitter, EventTarget, Manager, Runtime};
 
-pub const PALETTE_EVENT: &str = "palette-set";
 pub const MODE_EVENT: &str = "mode-set";
 pub const BOOKMARK_MENU_EVENT: &str = "bookmark-menu-action";
 /// Carries a menu action id (the part after `act:`) to the shell.
 pub const MENU_ACTION_EVENT: &str = "menu-action";
 
-const PALETTE_PREFIX: &str = "palette:";
 const MODE_PREFIX: &str = "mode:";
 const BOOKMARK_PREFIX: &str = "bmk:";
 const ACTION_PREFIX: &str = "act:";
@@ -104,19 +102,8 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         ],
     )?;
 
-    let p_aka = MenuItem::with_id(app, "palette:aka", "aka", true, None::<&str>)?;
-    let p_slate = MenuItem::with_id(app, "palette:slate", "Slate", true, None::<&str>)?;
-    let p_sand = MenuItem::with_id(app, "palette:sand", "Sand", true, None::<&str>)?;
-    let p_four_am = MenuItem::with_id(app, "palette:0400am", "0400AM", true, None::<&str>)?;
-    let p_mudd = MenuItem::with_id(app, "palette:mudd", "Mudd", true, None::<&str>)?;
-    let p_cyber = MenuItem::with_id(app, "palette:cyberspace", "Cyberspace", true, None::<&str>)?;
-    let theme_submenu = Submenu::with_items(
-        app,
-        "Theme",
-        true,
-        &[&p_aka, &p_slate, &p_sand, &p_four_am, &p_mudd, &p_cyber],
-    )?;
-
+    // Theme is one palette (aka) now, so there is no palette submenu —
+    // Appearance below is the whole of it, Light vs. Dark.
     let m_light = MenuItem::with_id(app, "mode:light", "Light", true, None::<&str>)?;
     let m_dark = MenuItem::with_id(app, "mode:dark", "Dark", true, None::<&str>)?;
     let appearance_submenu = Submenu::with_items(app, "Appearance", true, &[&m_light, &m_dark])?;
@@ -162,7 +149,6 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
                 Some("Alt+CmdOrCtrl+I"),
             )?,
             &PredefinedMenuItem::separator(app)?,
-            &theme_submenu,
             &appearance_submenu,
         ],
     )?;
@@ -237,9 +223,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
 
 pub fn handle_event<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
     let id: &str = event.id().as_ref();
-    if let Some(palette) = id.strip_prefix(PALETTE_PREFIX) {
-        let _ = app.emit(PALETTE_EVENT, palette);
-    } else if let Some(mode) = id.strip_prefix(MODE_PREFIX) {
+    if let Some(mode) = id.strip_prefix(MODE_PREFIX) {
         let _ = app.emit(MODE_EVENT, mode);
     } else if let Some(rest) = id.strip_prefix(BOOKMARK_PREFIX) {
         // id format: bmk:<action>:<bookmark_id>

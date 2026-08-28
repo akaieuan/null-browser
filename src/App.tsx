@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
@@ -8,6 +15,7 @@ import {
   ChevronRight,
   ChevronUp,
   Columns2,
+  FolderPlus,
   House,
   NotebookText,
   PanelLeft,
@@ -18,6 +26,7 @@ import {
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { Kicker } from "@/components/ui/atoms";
 import { ContextMenu, type ContextMenuItem } from "@/components/ContextMenu";
 import { Home } from "@/components/Home";
 import { Sidebar, type Selection, type Tab } from "@/components/Sidebar";
@@ -42,7 +51,7 @@ import {
   type ContentRect,
 } from "@/lib/layout";
 import { CORNERS, usePreferences, resolveStartUrl } from "@/lib/preferences";
-import { isPaletteId, type Mode, type PaletteId, useTheme } from "@/lib/theme";
+import { type Mode, useTheme } from "@/lib/theme";
 import { loadSession, saveSession } from "@/lib/session";
 import { resolveQuery } from "@/lib/url";
 import { cn } from "@/lib/utils";
@@ -140,6 +149,10 @@ function App() {
   useEffect(() => {
     splitPairRef.current = splitPair;
   }, [splitPair]);
+  // Was a pair live on the frame effect's previous run? Updated inside
+  // that effect (not mirrored here), so it lags splitPair by one run and
+  // can see the pair→null edge the moment a split is left.
+  const wasSplitRef = useRef(false);
   const splitRatioRef = useRef(0.5);
   useEffect(() => {
     splitRatioRef.current = splitRatio;
@@ -269,7 +282,7 @@ function App() {
   const toggleNotesRef = useRef(toggleNotes);
   toggleNotesRef.current = toggleNotes;
 
-  const { mode: themeMode, setPalette, setMode } = useTheme();
+  const { mode: themeMode, setMode } = useTheme();
   const { startPage, searchEngine, corners, glass, hoverReveal } =
     usePreferences();
 
@@ -362,6 +375,24 @@ function App() {
 
   const sidebarWidth = SIDEBAR_DEFAULT_WIDTH;
   const effectiveSidebarOpen = sidebarOpen && !autoCollapsed;
+
+  // The hover-reveal gutter unmounts the instant the sidebar opens — by
+  // hover or by any other route — so its own onMouseLeave can never fire
+  // to cancel a still-pending open. Clear that 250ms timer here instead,
+  // and on unmount, so it can't reassert an open the user already made
+  // (or undid) some other way.
+  useEffect(() => {
+    if (effectiveSidebarOpen && hoverTimerRef.current !== null) {
+      window.clearTimeout(hoverTimerRef.current);
+      hoverTimerRef.current = null;
+    }
+    return () => {
+      if (hoverTimerRef.current !== null) {
+        window.clearTimeout(hoverTimerRef.current);
+        hoverTimerRef.current = null;
+      }
+    };
+  }, [effectiveSidebarOpen]);
 
   const activeLoading =
     hasActiveWebview && activeId !== "" && loadingTabs.has(activeId);
@@ -515,17 +546,14 @@ function App() {
 
 
   useEffect(() => {
-    const palettePromise = listen<PaletteId>("palette-set", (e) => {
-      if (isPaletteId(e.payload)) setPalette(e.payload);
-    });
+    // Theme is one palette now; only the Light/Dark menu items emit.
     const modePromise = listen<Mode>("mode-set", (e) => {
       if (e.payload === "light" || e.payload === "dark") setMode(e.payload);
     });
     return () => {
-      palettePromise.then((off) => off());
       modePromise.then((off) => off());
     };
-  }, [setPalette, setMode]);
+  }, [setMode]);
 
   // Keep every tab webview at the computed frame. Chrome height is now
   // constant, so this fires only on window resize, sidebar toggle and
@@ -591,8 +619,17 @@ function App() {
   // one broadcast resize snaps every hidden tab to the current rect so
   // activating one later doesn't reveal a stale frame.
   useEffect(() => {
+    const leftSplit = wasSplitRef.current && !splitPair;
+    wasSplitRef.current = splitPair !== null;
     if (!splitPair) {
       if (activeTab?.hasWebview && !panelOpen) {
+        // Leaving a split resizes both panes to the full rect but the
+        // ex-partner's webview stays shown, stacked over the active one,
+        // until some later action hides it. Re-assert single-tab
+        // visibility the way a closing panel does — but only on the
+        // pair→null edge, so ordinary no-split renders (every tab
+        // switch) add no extra native churn.
+        if (leftSplit) ipc.activateTab(activeTab.id).catch(() => {});
         tweenFrame(activeTab.id, rectNow(), FRAME_MS, () => {
           broadcastFrame(rectNow());
         });
@@ -899,10 +936,17 @@ function App() {
         }
         if (wasActive) {
           const idx = prev.findIndex((t) => t.id === id);
-          // Prefer the neighbour to the right, as every other browser
-          // does — jumping to the end of a 20-tab list is disorienting.
-          const next = remaining[Math.min(idx, remaining.length - 1)];
-          decided = { next, wasActive: true };
+          // A prior close already took this id out of `prev` — two ⌘Ws
+          // landing in one React batch, the second reading the first's
+          // result. There is no neighbour to pick and nothing left to
+          // close; leaving `decided` null keeps the earlier close's
+          // choice instead of dereferencing remaining[-1].
+          if (idx >= 0) {
+            // Prefer the neighbour to the right, as every other browser
+            // does — jumping to the end of a 20-tab list is disorienting.
+            const next = remaining[Math.min(idx, remaining.length - 1)];
+            decided = { next, wasActive: true };
+          }
         }
         return remaining;
       });
@@ -951,6 +995,14 @@ function App() {
     setBookmarks((prev) => prev.filter((b) => b.id !== id));
   }, []);
 
+  // A new empty folder, ready to drag pins into. It persists until a pin
+  // it holds is dragged back out (storage::move_bookmark), so it will not
+  // vanish before it is used.
+  const createFolder = useCallback(async () => {
+    const folder = await ipc.createFolder();
+    setBookmarks((prev) => [...prev, folder]);
+  }, []);
+
   const [editingBookmark, setEditingBookmark] = useState<Bookmark | null>(null);
 
   const saveBookmarkEdit = useCallback(
@@ -968,6 +1020,12 @@ function App() {
       "bookmark-menu-action",
       (e) => {
         const { action, id } = e.payload;
+        // Create acts on the pin area, not the clicked pin — handle it
+        // before the target lookup that the rest require.
+        if (action === "new_folder") {
+          createFolder().catch(() => {});
+          return;
+        }
         const target = bookmarksRef.current.find((b) => b.id === id);
         if (!target) return;
         switch (action) {
@@ -1051,6 +1109,12 @@ function App() {
     tabId: string;
   } | null>(null);
   const closeTabMenu = useCallback(() => setTabMenu(null), []);
+
+  /** Right-click in the empty pin area: a small menu whose one job is
+      New Folder. Right-clicking a pin itself still raises the native
+      bookmark menu (which also carries New Folder). */
+  const [pinMenu, setPinMenu] = useState<{ x: number; y: number } | null>(null);
+  const closePinMenu = useCallback(() => setPinMenu(null), []);
 
   /**
    * Pair a tab with the active one, on the named side. Reads the live
@@ -1437,12 +1501,24 @@ function App() {
               e.preventDefault();
               ipc.showBookmarkMenu(id).catch(() => {});
             }}
+            onPinAreaContextMenu={(e) => {
+              e.preventDefault();
+              setPinMenu({ x: e.clientX, y: e.clientY });
+            }}
             onReorderBookmarks={(ids) => {
               setBookmarks((prev) => {
                 const byId = new Map(prev.map((b) => [b.id, b]));
-                const next = ids
+                const reordered = ids
                   .map((id) => byId.get(id))
                   .filter((b): b is Bookmark => !!b);
+                // `ids` is the top-level order only. Keep every in-folder
+                // pin (parent_id !== null) — rebuilding from `ids` alone
+                // would drop them and empty every folder on screen until
+                // the next refetch.
+                const next = [
+                  ...reordered,
+                  ...prev.filter((b) => b.parent_id !== null),
+                ];
                 ipc.reorderBookmarks(ids).catch(() => {
                   ipc.listBookmarks().then(setBookmarks).catch(() => {});
                 });
@@ -1593,6 +1669,7 @@ function App() {
                 onClick={toggleBookmark}
                 className={cn(
                   "ml-1 shrink-0 rounded-sm p-1 transition-colors",
+                  "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
                   activeBookmark
                     ? "text-select"
                     : "text-muted-foreground hover:text-foreground",
@@ -1691,7 +1768,7 @@ function App() {
                         .catch(() => {});
                     }
                   }}
-                  className="rounded-sm p-1 text-muted-foreground transition-colors hover:text-foreground"
+                  className="rounded-sm p-1 text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 >
                   <ChevronUp size={13} strokeWidth={1.5} />
                 </button>
@@ -1706,7 +1783,7 @@ function App() {
                         .catch(() => {});
                     }
                   }}
-                  className="rounded-sm p-1 text-muted-foreground transition-colors hover:text-foreground"
+                  className="rounded-sm p-1 text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 >
                   <ChevronDown size={13} strokeWidth={1.5} />
                 </button>
@@ -1715,7 +1792,7 @@ function App() {
                   aria-label="Close find bar"
                   title="Close · Esc"
                   onClick={closeFind}
-                  className="mr-0.5 rounded-sm p-1 text-muted-foreground transition-colors hover:text-foreground"
+                  className="mr-0.5 rounded-sm p-1 text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 >
                   <X size={13} strokeWidth={1.5} />
                 </button>
@@ -1743,6 +1820,7 @@ function App() {
               variant="ghost"
               size="icon"
               aria-label="Notes"
+              aria-pressed={!!notesMode}
               title="Notes · ⌘/"
               onClick={toggleNotes}
               className={cn(notesMode && "text-select")}
@@ -2023,6 +2101,27 @@ function App() {
             />
           );
         })()}
+
+      {/* Pin-area menu: right-clicking empty space in the saved-sites
+          grid. One item for now — New Folder — which drops an empty
+          folder ready to fill. */}
+      {pinMenu && (
+        <ContextMenu
+          x={pinMenu.x}
+          y={pinMenu.y}
+          maxX={sidebarWidth}
+          items={[
+            {
+              label: "New Folder",
+              icon: <FolderPlus size={14} strokeWidth={1.5} />,
+              onSelect: () => {
+                createFolder().catch(() => {});
+              },
+            },
+          ]}
+          onClose={closePinMenu}
+        />
+      )}
     </div>
   );
 }
@@ -2040,11 +2139,33 @@ function BookmarkEditPanel({
   const [url, setUrl] = useState(bookmark.url);
   const panelRef = useRef<HTMLDivElement>(null);
   const firstInputRef = useRef<HTMLInputElement>(null);
+  const titleId = useId();
 
   useEffect(() => {
     firstInputRef.current?.focus();
     firstInputRef.current?.select();
   }, []);
+
+  // Keep Tab inside the dialog while it's open: it behaves modally
+  // (overlay, closes on outside pointerdown / Escape), so focus must not
+  // wander into the chrome behind it.
+  const trapTab = (e: React.KeyboardEvent) => {
+    if (e.key !== "Tab") return;
+    const focusables = panelRef.current?.querySelectorAll<HTMLElement>(
+      'a[href], button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    );
+    if (!focusables || focusables.length === 0) return;
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    const activeEl = document.activeElement;
+    if (e.shiftKey && activeEl === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && activeEl === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  };
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -2073,6 +2194,9 @@ function BookmarkEditPanel({
     <div
       ref={panelRef}
       role="dialog"
+      aria-modal="true"
+      aria-labelledby={titleId}
+      onKeyDown={trapTab}
       data-tauri-drag-region="false"
       // Centred with a negative margin rather than -translate-x-1/2:
       // the width is a constant, and a keyframe replaces an element's
@@ -2080,13 +2204,13 @@ function BookmarkEditPanel({
       // the card 180px to the right for its first 160ms.
       className="absolute left-1/2 top-8 z-50 -ml-[180px] w-[360px] rounded-xl border border-border bg-background p-4 text-[13px] text-foreground motion-safe:animate-[np-drop_160ms_ease-out]"
     >
-      <div className="mb-3 font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+      <Kicker as="span" id={titleId} className="mb-3 block">
         Edit bookmark
-      </div>
+      </Kicker>
       <label className="mb-2 block">
-        <span className="mb-1 block font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+        <Kicker as="span" className="mb-1 block">
           Name
-        </span>
+        </Kicker>
         <input
           ref={firstInputRef}
           type="text"
@@ -2099,9 +2223,9 @@ function BookmarkEditPanel({
         />
       </label>
       <label className="mb-3 block">
-        <span className="mb-1 block font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+        <Kicker as="span" className="mb-1 block">
           URL
-        </span>
+        </Kicker>
         <input
           type="text"
           value={url}
@@ -2116,14 +2240,14 @@ function BookmarkEditPanel({
         <button
           type="button"
           onClick={onClose}
-          className="rounded-md px-2 py-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+          className="rounded-md px-2 py-1 text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
         >
           Cancel
         </button>
         <button
           type="button"
           onClick={save}
-          className="rounded-md bg-primary px-2 py-1 text-primary-foreground hover:bg-primary/90"
+          className="rounded-md bg-primary px-2 py-1 text-primary-foreground hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
         >
           Save
         </button>

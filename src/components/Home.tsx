@@ -1,8 +1,8 @@
 import { Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
+import { DataReach } from "@/components/DataReach";
 import { EmptyState } from "@/components/panels/EmptyState";
-import { TrackerGraph } from "@/components/TrackerGraph";
 import { Kicker } from "@/components/ui/atoms";
 import { ipc, type Artifact } from "@/lib/ipc";
 
@@ -15,15 +15,13 @@ import { ipc, type Artifact } from "@/lib/ipc";
  * destinations. What the sidebar lists but cannot show inline is clips —
  * and clips are the one thing in Null you deliberately made.
  *
- * One number does belong here: the trackers-seen calendar. The old
- * objection to a counter was that a figure ticking upward as you watch
- * is a dashboard element, and that the in-memory event ring could not
- * honestly say "today". A retrospective calendar answers both — it is a
- * record, not a live tally, and it reads from a persisted per-day table
- * (migration 010), so every cell is a real day. And it is honest about
- * itself: it counts trackers the browser *saw*, which blocking makes
- * fall, not blocks (which are uncountable). It hides itself until there
- * is a first sighting, so a fresh install still opens on the notes.
+ * One instrument belongs here: Reach, a live map of where the data goes.
+ * It reads from the same network stream the inspector does — you at the
+ * centre, every origin your browsing touched a spoke, the ones Null shut
+ * out drawn as severed. It floats straight on the background, never
+ * scrolls, and stays calm when the data is sparse, which the old
+ * year-calendar could not: real use is a handful of trackers, and a
+ * handful of cells in a grid of hundreds read as broken, not private.
  */
 export function Home({
   onOpenClip,
@@ -54,10 +52,10 @@ export function Home({
     // notes are objects on it.
     <div className="absolute inset-0 overflow-y-auto">
       <div className="mx-auto max-w-3xl px-8 pb-20 pt-16">
-        {/* Self-hides until the first tracker sighting, and carries its
-            own trailing gap so a fresh install opens straight on Notes
-            with no empty band above them. */}
-        <TrackerGraph />
+        {/* Floats on the background, carries its own trailing gap, and
+            shows a quiet invitation rather than a blank when nothing has
+            been reached yet. */}
+        <DataReach />
         <Kicker>Notes</Kicker>
         {clips.length === 0 ? (
           <div className="mt-4 max-w-md rounded-xl bg-card p-5">
@@ -149,7 +147,7 @@ function HomeClipCard({
           e.stopPropagation();
           onDelete();
         }}
-        className="absolute right-2 top-2 rounded-md p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-danger focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring group-hover:opacity-100"
+        className="absolute right-2 top-2 rounded-sm p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring group-hover:opacity-100"
       >
         <Trash2 size={13} strokeWidth={1.5} />
       </button>

@@ -1,4 +1,10 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { Check, ChevronDown } from "lucide-react";
 
 import { DEFAULT_START_PAGE, type StartPagePref } from "@/lib/preferences";
@@ -92,11 +98,16 @@ export function SegmentedControl({
 
 export function Toggle({
   label,
+  ariaLabel,
   checked,
   disabled = false,
   onChange,
 }: {
   label: string;
+  /** A descriptive accessible name, for when the visible `label` is a
+      state word ("On"/"Off") rather than what the switch controls — the
+      state itself is already announced by `aria-checked`. */
+  ariaLabel?: string;
   checked: boolean;
   /** No answer from the backend yet, so the switch has no truth to show. */
   disabled?: boolean;
@@ -107,6 +118,7 @@ export function Toggle({
       type="button"
       role="switch"
       aria-checked={checked}
+      aria-label={ariaLabel}
       disabled={disabled}
       onClick={() => onChange(!checked)}
       className={cn(
@@ -123,7 +135,7 @@ export function Toggle({
       >
         <span
           className={cn(
-            "h-3.5 w-3.5 rounded-full bg-background transition-transform",
+            "h-3.5 w-3.5 rounded-full bg-background motion-safe:transition-transform",
             checked && "translate-x-3.5",
           )}
         />
@@ -152,8 +164,12 @@ export function ModeButton({
       onClick={onClick}
       className={cn(
         "flex h-6 items-center gap-1.5 rounded-sm px-2 text-xs transition-colors",
+        "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+        // Selection is the same quiet --muted fill the SegmentedControl
+        // beside it uses, not the louder --accent — they are the same
+        // control family and read that way now.
         active
-          ? "bg-accent text-foreground"
+          ? "bg-muted text-foreground"
           : "text-muted-foreground hover:text-foreground",
       )}
     >
@@ -199,7 +215,18 @@ export function Dropdown({
   onChange: (next: string) => void;
 }) {
   const [open, setOpen] = useState(false);
+  // The keyboard-highlighted row while open, tracked by index so it can
+  // move independently of the committed value and drive
+  // aria-activedescendant. -1 only before the first open.
+  const [activeIndex, setActiveIndex] = useState(-1);
   const ref = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const listId = useId();
+  const optionId = (i: number) => `${listId}-opt-${i}`;
+  // Set when a close should hand focus back to the trigger (keyboard
+  // close), consumed by the open/close effect below.
+  const returnFocusRef = useRef(false);
 
   useEffect(() => {
     if (!open) return;
@@ -210,15 +237,62 @@ export function Dropdown({
     return () => document.removeEventListener("mousedown", handler);
   }, [open]);
 
-  const current = options.find((o) => o.value === value) ?? options[0];
+  const selectedIndex = options.findIndex((o) => o.value === value);
+  const current = options[selectedIndex] ?? options[0];
+
+  // Opening moves focus into the listbox (so arrow keys work at once) and
+  // starts the highlight on the committed value.
+  const openList = (index = selectedIndex < 0 ? 0 : selectedIndex) => {
+    setActiveIndex(index);
+    setOpen(true);
+  };
+  const closeList = (returnFocus: boolean) => {
+    // Focus return happens in the effect below, after React commits the
+    // unmount — a synchronous focus loses to the focused listbox being
+    // removed (focus falls to <body>), and rAF pauses in a background
+    // tab, so neither is reliable on its own.
+    returnFocusRef.current = returnFocus;
+    setOpen(false);
+  };
+  const commit = (i: number) => {
+    const o = options[i];
+    if (o) onChange(o.value);
+    closeList(true);
+  };
+
+  useEffect(() => {
+    if (open) {
+      listRef.current?.focus();
+    } else if (returnFocusRef.current) {
+      returnFocusRef.current = false;
+      triggerRef.current?.focus();
+    }
+  }, [open]);
 
   return (
     <div ref={ref} className="relative">
       <button
+        ref={triggerRef}
         type="button"
-        onClick={() => setOpen((v) => !v)}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-controls={open ? listId : undefined}
+        onClick={() => (open ? closeList(false) : openList())}
+        onKeyDown={(e) => {
+          if (!open && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
+            e.preventDefault();
+            openList(
+              e.key === "ArrowUp"
+                ? options.length - 1
+                : selectedIndex < 0
+                  ? 0
+                  : selectedIndex,
+            );
+          }
+        }}
         className={cn(
           "flex h-8 w-full items-center justify-between rounded-md border bg-input px-2.5 text-sm text-foreground transition-colors",
+          "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
           open ? "border-ring" : "border-border hover:border-ring/60",
         )}
       >
@@ -227,28 +301,81 @@ export function Dropdown({
           size={14}
           strokeWidth={1.5}
           className={cn(
-            "shrink-0 text-muted-foreground transition-transform",
+            "shrink-0 text-muted-foreground motion-safe:transition-transform",
             open && "rotate-180",
           )}
         />
       </button>
       {open && (
-        <div className="absolute left-0 right-0 top-full z-10 mt-1 overflow-hidden rounded-md border border-border bg-background">
-          {options.map((o) => {
+        <div
+          ref={listRef}
+          role="listbox"
+          id={listId}
+          tabIndex={-1}
+          aria-activedescendant={
+            activeIndex >= 0 ? optionId(activeIndex) : undefined
+          }
+          onKeyDown={(e) => {
+            switch (e.key) {
+              case "ArrowDown":
+                e.preventDefault();
+                e.stopPropagation();
+                setActiveIndex((i) => Math.min(options.length - 1, i + 1));
+                break;
+              case "ArrowUp":
+                e.preventDefault();
+                e.stopPropagation();
+                setActiveIndex((i) => Math.max(0, i - 1));
+                break;
+              case "Home":
+                e.preventDefault();
+                e.stopPropagation();
+                setActiveIndex(0);
+                break;
+              case "End":
+                e.preventDefault();
+                e.stopPropagation();
+                setActiveIndex(options.length - 1);
+                break;
+              case "Enter":
+              case " ":
+                e.preventDefault();
+                e.stopPropagation();
+                if (activeIndex >= 0) commit(activeIndex);
+                break;
+              case "Escape":
+                // Own the key: the window has a global Escape ("put the
+                // page back one layer") that would otherwise fire too and
+                // yank focus out of Settings behind the closing list.
+                e.preventDefault();
+                e.stopPropagation();
+                closeList(true);
+                break;
+              case "Tab":
+                // Let focus leave naturally, but don't leave an
+                // orphaned popup open behind it.
+                closeList(false);
+                break;
+            }
+          }}
+          className="absolute left-0 right-0 top-full z-10 mt-1 overflow-hidden rounded-md border border-border bg-background outline-none"
+        >
+          {options.map((o, i) => {
             const selected = o.value === value;
+            const active = i === activeIndex;
             return (
-              <button
+              <div
                 key={o.value}
-                type="button"
-                onClick={() => {
-                  onChange(o.value);
-                  setOpen(false);
-                }}
+                id={optionId(i)}
+                role="option"
+                aria-selected={selected}
+                onMouseEnter={() => setActiveIndex(i)}
+                onClick={() => commit(i)}
                 className={cn(
-                  "flex w-full items-center gap-2 px-2.5 py-2 text-left text-sm transition-colors",
-                  selected
+                  "flex w-full cursor-pointer items-center gap-2 px-2.5 py-2 text-left text-sm transition-colors",
+                  selected || active
                     ? "bg-muted/60 text-foreground"
-                    : "text-foreground hover:bg-muted/60",
+                    : "text-foreground",
                 )}
               >
                 <span
@@ -265,7 +392,7 @@ export function Dropdown({
                     {o.hint}
                   </span>
                 )}
-              </button>
+              </div>
             );
           })}
         </div>

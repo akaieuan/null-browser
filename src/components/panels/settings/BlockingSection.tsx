@@ -54,6 +54,9 @@ export function BlockingSection() {
             // Unknown is unknown: while the backend hasn't answered,
             // the label must not claim "Off".
             label={enabled === null ? "—" : enabled ? "On" : "Off"}
+            // The visible label is a state word, so name the control for
+            // assistive tech by what it does, not its value.
+            ariaLabel="Block ads and trackers"
             checked={enabled === true}
             disabled={enabled === null}
             onChange={setBlocking}

@@ -325,7 +325,7 @@ function NoteRow({
           type="button"
           onClick={onDelete}
           aria-label="Delete note"
-          className="rounded-sm p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100"
+          className="rounded-sm p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring group-hover:opacity-100"
         >
           <Trash2 size={13} strokeWidth={1.5} />
         </button>

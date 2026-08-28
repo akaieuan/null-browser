@@ -165,6 +165,7 @@ export const ipc = {
   listFavicons: () => invoke<Favicon[]>("get_favicons"),
   groupBookmarks: (target: number, dragged: number) =>
     invoke<void>("group_bookmarks", { target, dragged }),
+  createFolder: () => invoke<Bookmark>("create_folder"),
   moveBookmark: (id: number, parent: number | null) =>
     invoke<void>("move_bookmark", { id, parent }),
   setTabCornerRadius: (radius: number) =>

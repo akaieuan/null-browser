@@ -2,13 +2,12 @@ import { useEffect, useState } from "react";
 
 import { ipc } from "@/lib/ipc";
 
-export type PaletteId =
-  | "aka"
-  | "slate"
-  | "sand"
-  | "0400am"
-  | "mudd"
-  | "cyberspace";
+// One palette for now — aka. The others were a range of half-finished
+// moods; only this one earned its keep, so the picker is down to light
+// vs. dark and the identity is fixed. The plumbing (data-palette, the
+// menu event, this list) is kept intact so adding a palette later is a
+// block of CSS and a line here, not a rewire.
+export type PaletteId = "aka";
 
 export type Mode = "light" | "dark";
 
@@ -20,11 +19,6 @@ export interface Palette {
 
 export const PALETTES: Palette[] = [
   { id: "aka", label: "aka", swatch: "oklch(0.707 0.108 152.216)" },
-  { id: "slate", label: "Slate", swatch: "#334b6b" },
-  { id: "sand", label: "Sand", swatch: "#8b6b45" },
-  { id: "0400am", label: "0400AM", swatch: "oklch(0.686 0.143 285.656)" },
-  { id: "mudd", label: "Mudd", swatch: "oklch(0.182 0.014 94.03)" },
-  { id: "cyberspace", label: "Cyberspace", swatch: "oklch(0.748 0.043 31.264)" },
 ];
 
 export const DEFAULT_PALETTE: PaletteId = "aka";

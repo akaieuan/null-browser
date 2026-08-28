@@ -43,16 +43,19 @@
   --radius: 0.625rem;
 }
 
-/* ══════════════════════════ The palettes ══════════════════════════
-   Twelve in six pairs. Dark is the reference in every one.
+/* ══════════════════════════ The palette ══════════════════════════
+   One identity — aka — in two modes. Dark is the reference. (The app
+   once shipped six palettes; only aka held together, so the rest were
+   cut. The `data-palette` hook stays, so a new one is a block of CSS
+   below and one line in `src/lib/theme.ts`.)
 
    One accent leads — `--select` — and it is the only place a hue is
    allowed to carry meaning: the active tab, selection, focus, live
    state. `--danger` is the one other hue. Everything else is the
-   palette's neutral at a range of lightnesses.
+   neutral at a range of lightnesses.
 
    The surface ladder is what makes the chrome read as depth rather
-   than a flat field, and it is deliberate in every palette:
+   than a flat field:
 
      --background   the content ground (page cards, panels, Home)
      --muted        the chrome ground (sidebar, toolbar) — one step
@@ -64,14 +67,13 @@
 
    In dark, --accent sits ~0.10–0.12 above --background; in light it
    sits ~0.09–0.11 below. That gap is the fix for pins that used to
-   vanish, and it is held across all six.
+   vanish.
 
    `--select` changes hue between modes where the dark hue would go
    muddy on paper (the emerald that reads as "chosen" on black is wrong
-   on white — light takes it toward a truer green or a blue). Its
-   contrast is audited at ~4.5:1 against `--background` by
-   `npm run ui:tokens`; `--border` is a *control* edge, audited at
-   2.55:1. */
+   on white — light takes it toward a confident blue). Its contrast is
+   audited at ~4.5:1 against `--background` by `npm run ui:tokens`;
+   `--border` is a *control* edge, audited at 2.55:1. */
 
 /* ─── aka · graphite ─── the reference. Cool-neutral, no palette
    flourish; the accent is a clean emerald on black, a confident blue
@@ -99,199 +101,24 @@
   --foreground: oklch(0.19 0.006 264);
   --primary: oklch(0.19 0.006 264);
   --primary-foreground: oklch(0.988 0.002 264);
-  --muted: oklch(0.945 0.003 264);
-  --muted-foreground: oklch(0.47 0.007 264);
-  --accent: oklch(0.858 0.008 264);
+  /* The chrome sits a clearer step below the page than it used to
+     (0.945 → 0.928) with a hair more chroma, so the sidebar reads as
+     its own surface in light instead of dissolving into a near-white
+     page — the tone step is the separator, there are no hairlines. */
+  --muted: oklch(0.928 0.005 264);
+  --muted-foreground: oklch(0.46 0.008 264);
+  /* Pins/raised surfaces deepen to match, holding the ladder gap. */
+  --accent: oklch(0.846 0.011 264);
   --accent-foreground: oklch(0.19 0.006 264);
-  --border: oklch(0.19 0.006 264 / 44%);
-  --input: oklch(0.945 0.003 264);
-  --ring: oklch(0.528 0.17 256);
-  --subtle: oklch(0.52 0.007 264);
-  --select: oklch(0.528 0.17 256);
+  --border: oklch(0.19 0.006 264 / 46%);
+  --input: oklch(0.928 0.005 264);
+  /* Deepened a touch (0.528 → 0.515) to hold ~4.5:1 on the now-darker
+     selected-row surface — the accent marks a selected tab, so it has
+     to read on --muted, not only on the page. */
+  --ring: oklch(0.515 0.17 256);
+  --subtle: oklch(0.51 0.008 264);
+  --select: oklch(0.515 0.17 256);
   --danger: oklch(0.52 0.2 25);
-}
-
-/* ─── Slate · blue steel ─── the professional dark. A desaturated
-   navy-graphite with a bright azure accent; the neutral carries a
-   consistent cool hue all the way up the ladder. */
-:root[data-palette="slate"][data-mode="dark"] {
-  --background: oklch(0.17 0.018 256);
-  --foreground: oklch(0.955 0.006 256);
-  --primary: oklch(0.955 0.006 256);
-  --primary-foreground: oklch(0.17 0.018 256);
-  --muted: oklch(0.222 0.022 256);
-  --muted-foreground: oklch(0.71 0.026 256);
-  --accent: oklch(0.29 0.03 256);
-  --accent-foreground: oklch(0.955 0.006 256);
-  --border: oklch(0.78 0.04 256 / 42%);
-  --input: oklch(0.222 0.022 256);
-  --ring: oklch(0.7 0.15 245);
-  --subtle: oklch(0.6 0.03 256);
-  --select: oklch(0.7 0.15 245);
-  --danger: oklch(0.64 0.19 25);
-}
-
-:root[data-palette="slate"][data-mode="light"] {
-  --background: oklch(0.982 0.004 256);
-  --foreground: oklch(0.2 0.02 256);
-  --primary: oklch(0.2 0.02 256);
-  --primary-foreground: oklch(0.982 0.004 256);
-  --muted: oklch(0.938 0.008 256);
-  --muted-foreground: oklch(0.47 0.025 256);
-  --accent: oklch(0.848 0.02 256);
-  --accent-foreground: oklch(0.2 0.02 256);
-  --border: oklch(0.2 0.02 256 / 44%);
-  --input: oklch(0.938 0.008 256);
-  --ring: oklch(0.515 0.17 250);
-  --subtle: oklch(0.5 0.03 256);
-  --select: oklch(0.515 0.17 250);
-  --danger: oklch(0.52 0.2 25);
-}
-
-/* ─── Sand · warm paper ─── editorial and quiet. A warm taupe neutral,
-   a bronze-amber accent that stays legible without going gold. */
-:root[data-palette="sand"][data-mode="dark"] {
-  --background: oklch(0.19 0.012 74);
-  --foreground: oklch(0.955 0.012 83);
-  --primary: oklch(0.955 0.012 83);
-  --primary-foreground: oklch(0.19 0.012 74);
-  --muted: oklch(0.242 0.016 74);
-  --muted-foreground: oklch(0.72 0.022 78);
-  --accent: oklch(0.31 0.022 72);
-  --accent-foreground: oklch(0.955 0.012 83);
-  --border: oklch(0.8 0.03 78 / 42%);
-  --input: oklch(0.242 0.016 74);
-  --ring: oklch(0.76 0.11 71);
-  --subtle: oklch(0.61 0.026 76);
-  --select: oklch(0.76 0.11 71);
-  --danger: oklch(0.64 0.19 25);
-}
-
-:root[data-palette="sand"][data-mode="light"] {
-  --background: oklch(0.975 0.012 86);
-  --foreground: oklch(0.24 0.018 70);
-  --primary: oklch(0.24 0.018 70);
-  --primary-foreground: oklch(0.975 0.012 86);
-  --muted: oklch(0.935 0.018 86);
-  --muted-foreground: oklch(0.47 0.026 74);
-  --accent: oklch(0.852 0.038 84);
-  --accent-foreground: oklch(0.24 0.018 70);
-  --border: oklch(0.24 0.018 70 / 44%);
-  --input: oklch(0.935 0.018 86);
-  --ring: oklch(0.52 0.12 64);
-  --subtle: oklch(0.52 0.03 76);
-  --select: oklch(0.52 0.12 64);
-  --danger: oklch(0.52 0.2 25);
-}
-
-/* ─── 0400AM · deep indigo ─── night, not neon. A true indigo ground
-   (the old block landed saturated-purple slabs; this keeps chroma on
-   the accent, not the surfaces) with a cyan-teal that glows against it. */
-:root[data-palette="0400am"][data-mode="dark"] {
-  --background: oklch(0.17 0.03 274);
-  --foreground: oklch(0.955 0.008 274);
-  --primary: oklch(0.955 0.008 274);
-  --primary-foreground: oklch(0.17 0.03 274);
-  --muted: oklch(0.225 0.038 274);
-  --muted-foreground: oklch(0.73 0.04 278);
-  --accent: oklch(0.3 0.052 274);
-  --accent-foreground: oklch(0.955 0.008 274);
-  --border: oklch(0.78 0.06 278 / 42%);
-  --input: oklch(0.225 0.038 274);
-  --ring: oklch(0.78 0.13 200);
-  --subtle: oklch(0.63 0.05 276);
-  --select: oklch(0.78 0.13 200);
-  --danger: oklch(0.66 0.19 25);
-}
-
-:root[data-palette="0400am"][data-mode="light"] {
-  --background: oklch(0.975 0.008 284);
-  --foreground: oklch(0.21 0.04 274);
-  --primary: oklch(0.21 0.04 274);
-  --primary-foreground: oklch(0.975 0.008 284);
-  --muted: oklch(0.93 0.014 284);
-  --muted-foreground: oklch(0.47 0.04 276);
-  --accent: oklch(0.842 0.034 282);
-  --accent-foreground: oklch(0.21 0.04 274);
-  --border: oklch(0.21 0.04 274 / 44%);
-  --input: oklch(0.93 0.014 284);
-  --ring: oklch(0.5 0.13 244);
-  --subtle: oklch(0.5 0.05 276);
-  --select: oklch(0.5 0.13 244);
-  --danger: oklch(0.52 0.2 25);
-}
-
-/* ─── Mudd · warm olive ─── earth and moss. A warm olive-brown neutral
-   with a green accent grown from the same hue family. */
-:root[data-palette="mudd"][data-mode="dark"] {
-  --background: oklch(0.185 0.016 108);
-  --foreground: oklch(0.955 0.01 108);
-  --primary: oklch(0.955 0.01 108);
-  --primary-foreground: oklch(0.185 0.016 108);
-  --muted: oklch(0.238 0.02 108);
-  --muted-foreground: oklch(0.71 0.024 116);
-  --accent: oklch(0.305 0.028 112);
-  --accent-foreground: oklch(0.955 0.01 108);
-  --border: oklch(0.8 0.035 116 / 42%);
-  --input: oklch(0.238 0.02 108);
-  --ring: oklch(0.74 0.14 138);
-  --subtle: oklch(0.6 0.028 114);
-  --select: oklch(0.74 0.14 138);
-  --danger: oklch(0.64 0.19 25);
-}
-
-:root[data-palette="mudd"][data-mode="light"] {
-  --background: oklch(0.972 0.012 110);
-  --foreground: oklch(0.23 0.022 108);
-  --primary: oklch(0.23 0.022 108);
-  --primary-foreground: oklch(0.972 0.012 110);
-  --muted: oklch(0.93 0.02 110);
-  --muted-foreground: oklch(0.46 0.03 112);
-  --accent: oklch(0.848 0.044 112);
-  --accent-foreground: oklch(0.23 0.022 108);
-  --border: oklch(0.23 0.022 108 / 44%);
-  --input: oklch(0.93 0.02 110);
-  --ring: oklch(0.5 0.13 142);
-  --subtle: oklch(0.5 0.03 112);
-  --select: oklch(0.5 0.13 142);
-  --danger: oklch(0.52 0.2 25);
-}
-
-/* ─── Cyberspace · neon ─── the one stylized world. Near-black ground,
-   warm amber ink, a hot magenta-red accent. Bolder chroma than the
-   others by design, but the surface ladder still holds so pins read. */
-:root[data-palette="cyberspace"][data-mode="dark"] {
-  --background: oklch(0.11 0.014 350);
-  --foreground: oklch(0.86 0.055 85);
-  --primary: oklch(0.86 0.055 85);
-  --primary-foreground: oklch(0.11 0.014 350);
-  --muted: oklch(0.175 0.03 350);
-  --muted-foreground: oklch(0.74 0.05 82);
-  --accent: oklch(0.26 0.06 350);
-  --accent-foreground: oklch(0.86 0.055 85);
-  --border: oklch(0.68 0.13 358 / 60%);
-  --input: oklch(0.175 0.03 350);
-  --ring: oklch(0.68 0.2 8);
-  --subtle: oklch(0.6 0.05 84);
-  --select: oklch(0.68 0.2 8);
-  --danger: oklch(0.66 0.2 30);
-}
-
-:root[data-palette="cyberspace"][data-mode="light"] {
-  --background: oklch(0.968 0.012 350);
-  --foreground: oklch(0.2 0.04 5);
-  --primary: oklch(0.2 0.04 5);
-  --primary-foreground: oklch(0.968 0.012 350);
-  --muted: oklch(0.925 0.022 350);
-  --muted-foreground: oklch(0.47 0.06 5);
-  --accent: oklch(0.84 0.058 352);
-  --accent-foreground: oklch(0.2 0.04 5);
-  --border: oklch(0.2 0.04 5 / 44%);
-  --input: oklch(0.925 0.022 350);
-  --ring: oklch(0.53 0.2 10);
-  --subtle: oklch(0.5 0.08 6);
-  --select: oklch(0.53 0.2 10);
-  --danger: oklch(0.53 0.21 30);
 }
 
 /* ─────────────────────────── seam ───────────────────────────
@@ -309,9 +136,9 @@
    visible against arbitrary page content, where a tone step cannot
    reach. Deliberately not audited, deliberately alpha so it composites
    onto whatever surface it lands on, and deliberately quiet enough that
-   you have to look for it. One pair of rules covers all twelve palettes:
-   a seam is a shade of the ground, and every dark ground wants white,
-   every light ground black. */
+   you have to look for it. One pair of rules covers both modes: a seam
+   is a shade of the ground, and a dark ground wants white, a light
+   ground black. */
 :root {
   --seam: oklch(1 0 0 / 7%);
 }
@@ -351,6 +178,17 @@
 
 :root[data-vibrancy] body {
   background: transparent;
+}
+
+/* Light needs a denser wash than dark. The same translucent tint reads
+   far fainter over a bright wallpaper than over a dark one, which is why
+   the sidebar was hard to make out in light — its chrome wash all but
+   vanished. Higher percentages give the chrome and cards real presence
+   in light while staying glass. Placed before the strength presets so
+   `clear`/`solid` still win when the user picks them. */
+:root[data-vibrancy][data-mode="light"] {
+  --chrome: color-mix(in oklab, var(--muted) 46%, transparent);
+  --card: color-mix(in oklab, var(--background) 82%, transparent);
 }
 
 /* Glass strength, set from Settings. `clear` is the Zen look — mostly
@@ -431,6 +269,34 @@ body {
 @keyframes np-rise {
   from {
     transform: translateY(6px) scale(0.995);
+  }
+}
+
+/* A node arriving in the Reach map: it grows into place from a point,
+   the same "space moves, brightness doesn't" rule the entrances follow.
+   Keyed on the origin, so it plays once when a site is first contacted
+   and never again — which is what makes browsing read as live. */
+@keyframes np-pop {
+  from {
+    transform: scale(0.2);
+  }
+}
+
+/* A current running down a spoke. The dash pattern slides by exactly one
+   period, so data reads as flowing from you out to each site and the
+   loop is seamless — no jump, no flash, position only. */
+@keyframes np-flow {
+  to {
+    stroke-dashoffset: -25;
+  }
+}
+
+/* The live node's heartbeat: a ring that breathes in scale. Space, not
+   brightness — the ring grows and settles, it does not pulse in
+   opacity. Marks the connection Null is watching right now. */
+@keyframes np-breathe {
+  50% {
+    transform: scale(1.18);
   }
 }
 

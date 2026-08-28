@@ -88,6 +88,7 @@ export function Sidebar({
   onOpenBookmark,
   onOpenBookmarkInNewTab,
   onBookmarkContextMenu,
+  onPinAreaContextMenu,
   onReorderBookmarks,
   onSelectPanel,
   mode,
@@ -120,6 +121,8 @@ export function Sidebar({
   onOpenBookmark: (url: string) => void;
   onOpenBookmarkInNewTab: (url: string) => void;
   onBookmarkContextMenu: (e: React.MouseEvent, id: number) => void;
+  /** Right-click on empty space in the pin grid (not on a tile). */
+  onPinAreaContextMenu: (e: React.MouseEvent) => void;
   onReorderBookmarks: (ids: number[]) => void;
   onSelectPanel: (kind: "history" | "network" | "settings") => void;
   /** Current appearance mode, and a one-tap flip between light and dark. */
@@ -203,19 +206,39 @@ export function Sidebar({
 
     // Dead-centre on a tile means "into it"; the edges mean "beside
     // it" (reorder). The iOS folder gesture, by geometry.
+    const cx = at ? at.left + at.width / 2 : 0;
+    const cy = at ? at.top + at.height / 2 : 0;
+
+    // Dead-centre on the target's middle half — the gesture that folds
+    // two loose pins into a new folder.
     const centred =
       !!at &&
       !!over?.rect &&
-      at.left + at.width / 2 > over.rect.left + over.rect.width * 0.25 &&
-      at.left + at.width / 2 < over.rect.left + over.rect.width * 0.75 &&
-      at.top + at.height / 2 > over.rect.top + over.rect.height * 0.25 &&
-      at.top + at.height / 2 < over.rect.top + over.rect.height * 0.75;
+      cx > over.rect.left + over.rect.width * 0.25 &&
+      cx < over.rect.left + over.rect.width * 0.75 &&
+      cy > over.rect.top + over.rect.height * 0.25 &&
+      cy < over.rect.top + over.rect.height * 0.75;
+
+    // Centre anywhere within the target tile. Dropping a pin *on* a
+    // folder — anywhere on it — is what puts it in; the old dead-centre
+    // test made that drop nearly unhittable, which was the pin/folder
+    // breakage.
+    const withinTarget =
+      !!at &&
+      !!over?.rect &&
+      cx >= over.rect.left &&
+      cx <= over.rect.left + over.rect.width &&
+      cy >= over.rect.top &&
+      cy <= over.rect.top + over.rect.height;
 
     if (id.startsWith("tab:")) {
       if (ontoPage) {
         onDropTabToSplit(id.slice(4));
       } else if (target) {
-        onPinTab(id.slice(4), target.kind === "folder" ? target.id : null);
+        onPinTab(
+          id.slice(4),
+          target.kind === "folder" && withinTarget ? target.id : null,
+        );
       }
       return;
     }
@@ -225,34 +248,68 @@ export function Sidebar({
       if (dragged.kind === "bookmark") onDropBookmarkToSplit(dragged.url);
       return;
     }
-    if (target && centred && dragged.kind === "bookmark" && target.id !== dragged.id) {
-      if (target.kind === "folder") {
-        if (dragged.parent_id !== target.id) onMoveBookmark(dragged.id, target.id);
-        return;
-      }
-      if (dragged.parent_id === null) {
-        onGroupBookmarks(target.id, dragged.id);
-        return;
-      }
-      // A folder pin centred on a top-level pin falls through: it reads
-      // as "put it back up there", not "start a second folder".
+
+    // Dropped on a folder → into it. The whole tile is the target, so it
+    // is easy to hit; skipped when the pin already lives in that folder.
+    if (
+      target &&
+      target.kind === "folder" &&
+      withinTarget &&
+      dragged.kind === "bookmark" &&
+      target.id !== dragged.id &&
+      dragged.parent_id !== target.id
+    ) {
+      onMoveBookmark(dragged.id, target.id);
+      return;
     }
-    // A folder pin released anywhere but its own tray leaves the folder.
-    // The tray is the only "stay" region — the grid, the tab list, the
-    // gaps between them all mean "out". Forgiving on purpose: the exact
-    // landing spot is recoverable by reordering; being trapped is not.
+
+    // A pin dropped back on its OWN folder's tile stays put — "put it
+    // back", not "eject". Without this it would fall through to the leave
+    // branch below and be moved out, dissolving the folder if it was the
+    // last member.
+    if (
+      target &&
+      target.kind === "folder" &&
+      withinTarget &&
+      dragged.kind === "bookmark" &&
+      dragged.parent_id === target.id
+    ) {
+      return;
+    }
+
+    // A top-level pin dropped dead-centre on another top-level pin folds
+    // both into a new folder. Centre still gates this one, so reordering
+    // past a pin never spuriously creates a folder.
+    if (
+      target &&
+      centred &&
+      target.kind === "bookmark" &&
+      dragged.kind === "bookmark" &&
+      dragged.parent_id === null &&
+      target.id !== dragged.id
+    ) {
+      onGroupBookmarks(target.id, dragged.id);
+      return;
+    }
+
+    // A pin that lives in a folder, released anywhere but its own tray
+    // (and not onto another folder, handled above), leaves for the top
+    // level. Forgiving on purpose: being trapped is worse than an
+    // imprecise landing.
     if (dragged.parent_id !== null) {
       const tray = trayRef.current?.getBoundingClientRect();
       const inTray =
         !!at &&
         !!tray &&
-        at.left + at.width / 2 >= tray.left &&
-        at.left + at.width / 2 <= tray.right &&
-        at.top + at.height / 2 >= tray.top &&
-        at.top + at.height / 2 <= tray.bottom;
+        cx >= tray.left &&
+        cx <= tray.right &&
+        cy >= tray.top &&
+        cy <= tray.bottom;
       if (!inTray) onMoveBookmark(dragged.id, null);
       return;
     }
+
+    // Otherwise reorder among the top-level tiles.
     if (!over || active.id === over.id) return;
     const oldIdx = roots.findIndex((b) => b.id === active.id);
     const newIdx = roots.findIndex((b) => b.id === over.id);
@@ -332,6 +389,12 @@ export function Sidebar({
                   role="list"
                   aria-label="Saved sites"
                   className="grid shrink-0 grid-cols-4 gap-1.5 pt-1"
+                  onContextMenu={(e) => {
+                    // Only the grid's own empty space (gaps, padding). A
+                    // tile handles its own right-click and bubbles here, so
+                    // ignore anything that started on a child.
+                    if (e.target === e.currentTarget) onPinAreaContextMenu(e);
+                  }}
                 >
                   {roots.map((b) =>
                     b.kind === "folder" ? (
@@ -339,6 +402,7 @@ export function Sidebar({
                         <SortableTile
                           bookmark={b}
                           selected={openFolder === b.id}
+                          expanded={openFolder === b.id}
                           onClick={() =>
                             setOpenFolder((cur) => (cur === b.id ? null : b.id))
                           }
@@ -682,6 +746,7 @@ function DraggableFolderPin({
 function SortableTile({
   bookmark,
   selected = false,
+  expanded,
   onClick,
   onAuxClick,
   onContextMenu,
@@ -690,6 +755,9 @@ function SortableTile({
   bookmark: Bookmark;
   /** Folder tiles mark their open state; pins never set this. */
   selected?: boolean;
+  /** Set on folder tiles — a folder is a disclosure control that opens
+      the pin tray. Left undefined on pins, which are not. */
+  expanded?: boolean;
   onClick: () => void;
   onAuxClick: (e: React.MouseEvent) => void;
   onContextMenu: (e: React.MouseEvent) => void;
@@ -716,6 +784,7 @@ function SortableTile({
         onContextMenu={onContextMenu}
         // The tile shows no text, so the accessible name has to be here.
         aria-label={name}
+        aria-expanded={expanded}
         title={bookmark.url ? `${name}\n${bookmark.url}` : name}
         // A tone step, not an outline — a solid `--accent` fill, which
         // the palette now sets a clear step above `--muted` (the

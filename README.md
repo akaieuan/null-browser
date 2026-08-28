@@ -77,8 +77,8 @@ Every keyboard shortcut is a native menu accelerator rather than a listener in t
 ### Bookmarks
 - Star inside the URL bar to add/remove the active page; drag a tab into the pin grid to pin it
 - Tiles at the top of the sidebar showing each site's real favicon — captured from the page as you visit it, never fetched by Null (invariant 2); a hostname-derived letter mark stands in until the first visit
-- Drop one pin dead-centre on another to create a folder (edges still reorder); folder tiles show a 2×2 of their members, click to spread them open. Pins leave the same way they came: drag one out of the open folder's tray and release it anywhere outside to return it to the grid, dead-centre on another folder to move it there, or past the sidebar to open a split. The last pin out dissolves the folder, and deleting a folder re-roots its pins — arrangement is never a place data can be lost
-- Right-click for the native context menu — open in new tab, edit, copy URL, delete; middle-click opens in a new tab
+- Fold two pins into a folder by dropping one dead-centre on the other (edges still reorder), or make an empty one with **New Folder** — from a pin's right-click menu or a right-click on empty grid space — and drag pins in. Dropping a pin anywhere on a folder tile files it there; folder tiles show a 2×2 of their members, click to spread them open. Pins leave the same way: drag one out of the open tray and release it outside to return it to the grid, on another folder to move it there, or past the sidebar to open a split. A folder dissolves when its last pin is dragged out — an empty one you made on purpose persists until you fill or delete it — and deleting a folder re-roots its pins, so arrangement is never a place data can be lost
+- Right-click a pin for the native context menu — open in new tab, edit, copy URL, **New Folder**, delete; middle-click opens in a new tab
 - Persisted in SQLite (`bookmarks` table; migration 008 adds folders)
 
 ### History
@@ -111,9 +111,9 @@ The list is written in this repository, by hand. Nothing in it is imported from 
 
 One caveat worth setting expectations on: this does not clear YouTube's ads. YouTube serves them from the same hosts as the video itself, and no hostname list can separate the two. What it does remove is the tracking and the display advertising on the rest of the web.
 
-### Trackers seen
+### Reach
 
-The new-tab surface carries a GitHub-style calendar of **trackers seen** — one cell per day, shaded by how many requests to known tracker hosts the browser observed that day. It is honest about what it counts: requests that *loaded*, not ones that were blocked. A blocked request never reaches the observer (it dies in WebKit before a connection opens, which is why blocked requests are invisible to the inspector too), so switching blocking on makes the graph fall. It reads as exposure, and the drop is the blocker working — not a scoreboard of blocks, which are by design uncountable. The data is a per-day integer in SQLite (migration 010): a count and a date, never which tracker or when, so it holds far less than history already does. The graph hides itself until the first sighting, so a fresh install still opens on your notes.
+The new-tab surface carries **Reach** — a live hub-and-spoke map of where your data goes, read from the same event stream the Network Inspector uses. You are the hub; every origin your browsing has reached this session is a spoke, sized by how often it was hit, with a current flowing down each open one; the active site wears the accent and its ring breathes. An origin Null shut out is drawn as a severed dashed line ending in a hollow `--danger` ring — the connection that never opened, shown rather than counted. It floats straight on the background, never scrolls, and stays a calm constellation when the data is sparse, where the old year-calendar of "trackers seen" went to a sea of empty cells the moment real use turned out to be a handful of trackers. It is a live instrument, not a ledger: it reflects this session and fills as you browse. (A persisted per-day tally still lives in SQLite — migration 010 — as a count and a date, never which tracker or when.)
 
 ### Notes
 
@@ -177,14 +177,14 @@ A SearXNG provider lives in the Rust backend: you point it at an instance you ho
 It currently has **no UI**. The search view was part of the AI drawer that was removed, and Clips didn't replace it. The commands are registered and the typed wrappers exist in `src/lib/ipc.ts`, but nothing in the app calls them yet. Re-surfacing it is on the list below.
 
 ### Themes
-- Six palettes (aka, Slate, Sand, 0400AM, Mudd, Cyberspace) × two modes (light, dark)
-- `aka` in dark is the default and the reference
-- Live preview — switch in Settings, or from the View menu
-- All stored in `localStorage`, applied via OKLCH CSS custom properties
+- One palette, `aka`, in two modes (light, dark); dark is the default and the reference
+- Switch mode in Settings → Appearance, from the View → Appearance menu, or the sidebar toggle
+- Stored in `localStorage`, applied via OKLCH CSS custom properties
+- The `data-palette` hook is kept, so re-adding a palette later is a block of CSS plus one line in `src/lib/theme.ts`
 
 ### Local profile (cosmetic, for now)
 - Editable name (defaults to "Null"), in Settings → Browsing
-- Quick prefs card: palette swatches, Sun/Moon toggle, start page (Null landing / DuckDuckGo / custom URL), search engine
+- Quick prefs card: Sun/Moon mode toggle, start page (Null landing / DuckDuckGo / custom URL), search engine
 - "Clear history & logins" — wipes local history and, in every live tab, cookies / localStorage / sessionStorage / IndexedDB. Click twice to confirm
 - "Open full settings" link into the deeper Settings panel
 - Multi-profile switching is not built yet

@@ -14,51 +14,18 @@ import {
   type CornersPref,
   type GlassPref,
 } from "@/lib/preferences";
-import { PALETTES, useTheme } from "@/lib/theme";
-import { cn } from "@/lib/utils";
+import { useTheme } from "@/lib/theme";
 
 export function AppearanceSection() {
-  const { palette, mode, setPalette, setMode } = useTheme();
+  const { mode, setMode } = useTheme();
   const { corners, setCorners, glass, setGlass, hoverReveal, setHoverReveal } =
     usePreferences();
-  const active = PALETTES.find((p) => p.id === palette) ?? PALETTES[0];
   return (
     <section>
       <SectionHeader title="Appearance" />
       <div className="mt-1 flex flex-col">
-        <Row label="Theme">
-          <div className="flex items-center gap-3">
-            <span className="text-muted-foreground">{active.label}</span>
-            {/* The selected swatch is haloed, not tinted. Marking it with
-                --select would make it invisible on whichever swatch *is*
-                --select — which, for the default palette, is the one you
-                are most likely to be looking at. A ring separated from the
-                swatch by a gap in the background colour reads on any hue. */}
-            <div className="flex items-center gap-2.5">
-              {PALETTES.map((p) => {
-                const selected = palette === p.id;
-                return (
-                  <button
-                    key={p.id}
-                    type="button"
-                    aria-label={p.label}
-                    aria-pressed={selected}
-                    title={p.label}
-                    onClick={() => setPalette(p.id)}
-                    className={cn(
-                      "h-4 w-4 rounded-full border border-border transition",
-                      "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-offset-2 focus-visible:ring-offset-background focus-visible:ring-ring",
-                      selected
-                        ? "ring-1 ring-offset-2 ring-offset-background ring-foreground"
-                        : "opacity-70 hover:opacity-100",
-                    )}
-                    style={{ background: p.swatch }}
-                  />
-                );
-              })}
-            </div>
-          </div>
-        </Row>
+        {/* One palette for now (aka), so there is no swatch row — the
+            mode switch below is the whole of Theme. */}
         <Row label="Mode">
           <div className="flex items-center gap-1 rounded-md border border-border p-0.5">
             <ModeButton

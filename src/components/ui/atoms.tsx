@@ -14,15 +14,18 @@ import { cn } from "@/lib/utils";
  */
 export function Kicker({
   as: Tag = "h2",
+  id,
   className,
   children,
 }: {
   as?: "h2" | "h3" | "span";
+  id?: string;
   className?: string;
   children: React.ReactNode;
 }) {
   return (
     <Tag
+      id={id}
       className={cn(
         "font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground",
         className,

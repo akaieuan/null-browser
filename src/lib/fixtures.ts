@@ -131,17 +131,39 @@ export function fixtureFor(cmd: string, args?: Record<string, unknown>): unknown
       const b = BOOKMARKS.find(
         (x) => x.id === args?.id && x.kind === "bookmark",
       );
-      if (b) b.parent_id = (args?.parent as number | null) ?? null;
-      for (let i = BOOKMARKS.length - 1; i >= 0; i--) {
-        const f = BOOKMARKS[i];
-        if (
-          f.kind === "folder" &&
-          !BOOKMARKS.some((c) => c.parent_id === f.id)
-        ) {
-          BOOKMARKS.splice(i, 1);
+      if (!b) return null;
+      const oldParent = b.parent_id;
+      const newParent = (args?.parent as number | null) ?? null;
+      b.parent_id = newParent;
+      // Scoped dissolve, matching storage::move_bookmark: only the folder
+      // the pin just left goes, so an empty folder made with New Folder
+      // survives until something is dragged in.
+      if (oldParent !== null && oldParent !== newParent) {
+        const idx = BOOKMARKS.findIndex(
+          (f) => f.id === oldParent && f.kind === "folder",
+        );
+        if (idx >= 0 && !BOOKMARKS.some((c) => c.parent_id === oldParent)) {
+          BOOKMARKS.splice(idx, 1);
         }
       }
+      // Mirror storage: the moved pin takes the last position in its new
+      // sibling group. BOOKMARKS order is render order and each group
+      // renders in array order, so moving the row to the end lands it
+      // last among its new siblings (where position = MAX+1 puts it).
+      const at = BOOKMARKS.indexOf(b);
+      if (at >= 0) {
+        BOOKMARKS.splice(at, 1);
+        BOOKMARKS.push(b);
+      }
       return null;
+    }
+    case "create_folder": {
+      const folder = {
+        id: nextFixtureId++, url: "", title: "Folder",
+        created_at: now, kind: "folder", parent_id: null as number | null,
+      };
+      BOOKMARKS.push(folder);
+      return folder;
     }
     case "group_bookmarks": {
       const folder = {

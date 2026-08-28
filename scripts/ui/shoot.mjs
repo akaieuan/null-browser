@@ -17,22 +17,16 @@ const APP = process.env.NULL_DEV_URL ?? 'http://localhost:1420/';
 const W = 1280;
 const H = 800;
 
-const PALETTES = [
-  ['aka', 'aka'],
-  ['slate', 'Slate'],
-  ['sand', 'Sand'],
-  ['0400am', '0400AM'],
-  ['mudd', 'Mudd'],
-  ['cyberspace', 'Cyberspace'],
-];
+// One palette now — aka — captured in both modes.
+const PALETTES = [['aka', 'aka']];
 
 const STATES = [
-  ['01-home', 'Home', 'A calendar of trackers seen sits above the recent notes: one cell per day, shaded by how many tracker requests the browser observed — a record of exposure, not a scoreboard of blocks.'],
+  ['01-home', 'Home', 'Reach floats above the recent notes: you at the hub, every site your browsing touched a spoke, the one Null blocked a severed dashed line ending in a hollow ring. The Network Inspector, distilled to one live glance.'],
   ['02-notes', 'Notes', 'A card dropped in from the toolbar: the page yields the width, the gutter separates them, and one control widens it to a half-window split.'],
   ['02b-note-viewer', 'Note', 'Markdown, rendered. The heading is dropped from the body because the header already carries it.'],
   ['03-history', 'History', 'Header and body share one measure, so the panel has a single left edge and a single right edge.'],
   ['04-network', 'Network', 'Every outbound connection, grouped by origin. Blocked origins are struck through.'],
-  ['05-settings', 'Settings', 'A left rail names the sections and the content column takes its own measure beside them. The selected palette is haloed rather than tinted — a colour swatch cannot be marked with a colour.'],
+  ['05-settings', 'Settings', 'A left rail names the sections and the content column takes its own measure beside them. Theme is one palette now, so Appearance is Mode, Corners, Glass and the sidebar hover-reveal.'],
   ['05b-settings-blocking', 'Blocking', 'The bundled rule list is one switch. Origins blocked by hand from the Network panel are listed beneath it, each with its own way back.'],
 ];
 
@@ -280,10 +274,10 @@ await sheet({
 await sheet({
   file: path.join(DOCS, 'palettes.png'),
   width: 1500,
-  title: 'Null · palettes',
+  title: 'Null · palette',
   lede:
-    'Six palettes, both modes, captured from the running interface. Dark ' +
-    'frames show Home; light frames have the Notes card open, so the ' +
+    'aka, both modes, captured from the running interface. The dark ' +
+    'frame shows Home; the light frame has the Notes card open, so the ' +
     'unfocused selection state (grey bar, on the tab) sits next to the ' +
     'focused one (accent bar, on Notes).',
   body: PALETTES.flatMap(([id, label]) =>

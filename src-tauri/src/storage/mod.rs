@@ -186,10 +186,49 @@ impl Storage {
         tx.commit()
     }
 
+    /// Create an empty folder at the top level. Unlike the group gesture
+    /// (`group_bookmarks`), this starts empty and *persists* — the user
+    /// fills it by dragging pins in. It dissolves only when a pin it holds
+    /// is dragged back out, never merely for being empty, or a right-click
+    /// "New Folder" would vanish before it could be used.
+    pub fn create_folder(&self, title: &str) -> rusqlite::Result<Bookmark> {
+        let conn = self.conn();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        conn.execute(
+            "INSERT INTO bookmarks (url, title, created_at, position, kind) \
+             VALUES ('', ?1, ?2, \
+                     (SELECT COALESCE(MAX(position) + 1, 0) FROM bookmarks), 'folder')",
+            params![title, now],
+        )?;
+        Ok(Bookmark {
+            id: conn.last_insert_rowid(),
+            url: String::new(),
+            title: title.to_string(),
+            created_at: now,
+            kind: "folder".to_string(),
+            parent_id: None,
+        })
+    }
+
     /// Move a bookmark into a folder (or back to the top level with
     /// `None`). Folders themselves never nest.
     pub fn move_bookmark(&self, id: i64, parent_id: Option<i64>) -> rusqlite::Result<()> {
         let conn = self.conn();
+        // The folder the pin is leaving is the only one that may now need
+        // to dissolve. A blanket "delete every empty folder" also deletes
+        // a folder the user just made with New Folder and is about to fill
+        // — which is exactly the pin/folder breakage this fixes.
+        let old_parent: Option<i64> = conn
+            .query_row(
+                "SELECT parent_id FROM bookmarks WHERE id = ?1 AND kind = 'bookmark'",
+                params![id],
+                |r| r.get(0),
+            )
+            .ok()
+            .flatten();
         conn.execute(
             "UPDATE bookmarks SET parent_id = ?1, \
              position = (SELECT COALESCE(MAX(position) + 1, 0) FROM bookmarks b2 \
@@ -197,12 +236,17 @@ impl Storage {
              WHERE id = ?2 AND kind = 'bookmark'",
             params![parent_id, id],
         )?;
-        // An emptied folder dissolves — an empty tile is furniture.
-        conn.execute(
-            "DELETE FROM bookmarks WHERE kind = 'folder' \
-             AND NOT EXISTS (SELECT 1 FROM bookmarks c WHERE c.parent_id = bookmarks.id)",
-            [],
-        )?;
+        // A folder dissolves the moment its last member leaves — but only
+        // the folder just emptied, so an explicitly-created empty one lives.
+        if let Some(old) = old_parent {
+            if Some(old) != parent_id {
+                conn.execute(
+                    "DELETE FROM bookmarks WHERE id = ?1 AND kind = 'folder' \
+                     AND NOT EXISTS (SELECT 1 FROM bookmarks c WHERE c.parent_id = ?1)",
+                    params![old],
+                )?;
+            }
+        }
         Ok(())
     }
 

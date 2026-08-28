@@ -267,6 +267,7 @@ pub fn run() {
             commands::artifacts::update_note,
             commands::favicons::get_favicons,
             commands::bookmarks::group_bookmarks,
+            commands::bookmarks::create_folder,
             commands::bookmarks::move_bookmark,
             commands::meta::set_window_theme,
             commands::meta::set_glass_material,

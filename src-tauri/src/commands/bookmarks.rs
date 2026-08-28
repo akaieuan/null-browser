@@ -34,6 +34,12 @@ pub fn group_bookmarks(storage: State<Storage>, target: i64, dragged: i64) -> Re
         .map_err(|e| e.to_string())
 }
 
+/// Create an empty folder at the top level, to fill by dragging pins in.
+#[tauri::command]
+pub fn create_folder(storage: State<Storage>) -> Result<Bookmark, String> {
+    storage.create_folder("Folder").map_err(|e| e.to_string())
+}
+
 /// Move a pin into a folder, or back to the top level with `null`.
 #[tauri::command]
 pub fn move_bookmark(storage: State<Storage>, id: i64, parent: Option<i64>) -> Result<(), String> {
@@ -88,6 +94,14 @@ pub fn show_bookmark_menu<R: Runtime>(
         None::<&str>,
     )
     .map_err(|e| e.to_string())?;
+    let new_folder = MenuItem::with_id(
+        &app,
+        format!("bmk:new_folder:{id}"),
+        "New Folder",
+        true,
+        None::<&str>,
+    )
+    .map_err(|e| e.to_string())?;
     let delete = MenuItem::with_id(
         &app,
         format!("bmk:delete:{id}"),
@@ -98,10 +112,20 @@ pub fn show_bookmark_menu<R: Runtime>(
     .map_err(|e| e.to_string())?;
     let sep_a = PredefinedMenuItem::separator(&app).map_err(|e| e.to_string())?;
     let sep_b = PredefinedMenuItem::separator(&app).map_err(|e| e.to_string())?;
+    let sep_c = PredefinedMenuItem::separator(&app).map_err(|e| e.to_string())?;
 
     let menu = Menu::with_items(
         &app,
-        &[&open_new_tab, &sep_a, &edit, &copy_url, &sep_b, &delete],
+        &[
+            &open_new_tab,
+            &sep_a,
+            &edit,
+            &copy_url,
+            &sep_b,
+            &new_folder,
+            &sep_c,
+            &delete,
+        ],
     )
     .map_err(|e| e.to_string())?;
 

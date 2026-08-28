@@ -6,10 +6,10 @@
  * the first row, and this message all start at the same x, so the layout
  * does not rearrange itself the moment the first item arrives.
  *
- * The `hint` is where the honest detail goes — where the files actually
- * are, what the list will contain. Empty states are the one place a user
- * is guaranteed to read, so they carry information rather than
- * encouragement.
+ * The children are where the honest detail goes — where the files
+ * actually are, what the list will contain. Empty states are the one
+ * place a user is guaranteed to read, so they carry information rather
+ * than encouragement.
  */
 export function EmptyState({
   title,
