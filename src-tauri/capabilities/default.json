@@ -56,6 +56,7 @@
     "allow-update-note",
     "allow-get-favicons",
     "allow-group-bookmarks",
+    "allow-create-folder",
     "allow-move-bookmark",
     "allow-set-window-theme",
     "allow-set-glass-material",

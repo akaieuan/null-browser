@@ -52,7 +52,12 @@ pub fn hide_all_tabs(webview: Webview, app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn navigate_tab(webview: Webview, app: AppHandle, id: String, url: String) -> Result<(), String> {
+pub fn navigate_tab(
+    webview: Webview,
+    app: AppHandle,
+    id: String,
+    url: String,
+) -> Result<(), String> {
     ensure_shell(&webview)?;
     webview::navigate_tab(&app, &id, &url)
 }
@@ -88,7 +93,12 @@ pub fn open_tab_devtools(webview: Webview, app: AppHandle, id: String) {
 
 /// ⌘+ / ⌘− / ⌘0 — page zoom on one tab.
 #[tauri::command]
-pub fn set_tab_zoom(webview: Webview, app: AppHandle, id: String, factor: f64) -> Result<(), String> {
+pub fn set_tab_zoom(
+    webview: Webview,
+    app: AppHandle,
+    id: String,
+    factor: f64,
+) -> Result<(), String> {
     ensure_shell(&webview)?;
     webview::set_tab_zoom(&app, &id, factor)
 }

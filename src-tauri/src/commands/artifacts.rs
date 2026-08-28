@@ -25,7 +25,11 @@ pub fn list_artifacts(webview: Webview, storage: State<Storage>) -> Result<Vec<A
 }
 
 #[tauri::command]
-pub fn get_artifact(webview: Webview, storage: State<Storage>, id: i64) -> Result<Artifact, String> {
+pub fn get_artifact(
+    webview: Webview,
+    storage: State<Storage>,
+    id: i64,
+) -> Result<Artifact, String> {
     ensure_shell(&webview)?;
     let artifact = storage.get_artifact(id).map_err(|e| e.to_string())?;
     // Opening is when external edits to the file mirror get adopted —

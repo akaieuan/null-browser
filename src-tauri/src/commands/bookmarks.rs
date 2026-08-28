@@ -47,7 +47,8 @@ pub fn group_bookmarks(
 
 /// Create an empty folder at the top level, to fill by dragging pins in.
 #[tauri::command]
-pub fn create_folder(storage: State<Storage>) -> Result<Bookmark, String> {
+pub fn create_folder(webview: Webview, storage: State<Storage>) -> Result<Bookmark, String> {
+    ensure_shell(&webview)?;
     storage.create_folder("Folder").map_err(|e| e.to_string())
 }
 

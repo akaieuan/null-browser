@@ -17,8 +17,8 @@ fn main() {
     // handler but missing here has no permission, so the runtime denies it
     // for *every* webview — the shell included. Keep the order identical to
     // the handler so the two lists diff line-for-line. See docs/SECURITY.md.
-    let attributes = tauri_build::Attributes::new().app_manifest(
-        tauri_build::AppManifest::new().commands(&[
+    let attributes =
+        tauri_build::Attributes::new().app_manifest(tauri_build::AppManifest::new().commands(&[
             "get_app_version",
             "open_tab",
             "activate_tabs",
@@ -66,6 +66,7 @@ fn main() {
             "update_note",
             "get_favicons",
             "group_bookmarks",
+            "create_folder",
             "move_bookmark",
             "set_window_theme",
             "set_glass_material",
@@ -73,7 +74,6 @@ fn main() {
             "search_set_instance",
             "search_clear_instance",
             "search_web",
-        ]),
-    );
+        ]));
     tauri_build::try_build(attributes).expect("failed to run tauri-build");
 }
