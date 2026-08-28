@@ -717,17 +717,20 @@ function SortableTile({
         // The tile shows no text, so the accessible name has to be here.
         aria-label={name}
         title={bookmark.url ? `${name}\n${bookmark.url}` : name}
-        // A tone step, not an outline — and it steps off `--muted`,
-        // which is the sidebar's own ground, so the step is
-        // muted→accent rather than background→muted.
+        // A tone step, not an outline — a solid `--accent` fill, which
+        // the palette now sets a clear step above `--muted` (the
+        // sidebar ground) so the tile reads as a raised chip and keeps
+        // reading once both go translucent over the window glass. Full
+        // opacity on purpose: at 60% the tile dissolved into the blur.
         // Pointing at a tile lifts it a pixel, the same answer Home's
-        // note cards give: space moves, brightness is left alone.
+        // note cards give: space moves, brightness is left alone. An
+        // open folder takes the accent ring to mark it active.
         className={cn(
-          "flex aspect-square w-full items-center justify-center rounded-xl transition-[background-color,transform] duration-150 ease-out",
+          "flex aspect-square w-full items-center justify-center rounded-xl bg-accent transition-transform duration-150 ease-out",
           "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
           selected
-            ? "bg-accent"
-            : "bg-accent/60 hover:bg-accent motion-safe:hover:-translate-y-px",
+            ? "ring-1 ring-select"
+            : "motion-safe:hover:-translate-y-px",
         )}
         {...attributes}
         {...listeners}
