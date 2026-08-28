@@ -1450,6 +1450,8 @@ function App() {
               });
             }}
             onSelectPanel={selectPanel}
+            mode={themeMode}
+            onToggleMode={() => setMode(themeMode === "dark" ? "light" : "dark")}
             onDropTabToSplit={(tabId) => {
               const act = tabsRef.current.find(
                 (t) => t.id === activeIdRef.current,

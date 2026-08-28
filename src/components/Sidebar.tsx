@@ -1,9 +1,11 @@
 import {
   Activity,
   History as HistoryIcon,
+  Moon,
   PanelLeft,
   Plus,
   Settings as SettingsIcon,
+  Sun,
   X,
 } from "lucide-react";
 import {
@@ -33,6 +35,7 @@ import { Button } from "@/components/ui/button";
 import { SIDEBAR_HEADER_HEIGHT, TRAFFIC_LIGHT_INSET } from "@/lib/layout";
 import { cn } from "@/lib/utils";
 import type { Bookmark } from "@/lib/ipc";
+import type { Mode } from "@/lib/theme";
 
 export type Tab = {
   id: string;
@@ -87,6 +90,8 @@ export function Sidebar({
   onBookmarkContextMenu,
   onReorderBookmarks,
   onSelectPanel,
+  mode,
+  onToggleMode,
   onDropTabToSplit,
   onDropBookmarkToSplit,
   onSplitDragOver,
@@ -117,6 +122,9 @@ export function Sidebar({
   onBookmarkContextMenu: (e: React.MouseEvent, id: number) => void;
   onReorderBookmarks: (ids: number[]) => void;
   onSelectPanel: (kind: "history" | "network" | "settings") => void;
+  /** Current appearance mode, and a one-tap flip between light and dark. */
+  mode: Mode;
+  onToggleMode: () => void;
   /** A tab row was dragged out of the sidebar onto the page area. */
   onDropTabToSplit: (tabId: string) => void;
   /** A bookmark tile was dragged out of the sidebar onto the page area. */
@@ -474,6 +482,19 @@ export function Sidebar({
           <Activity size={14} strokeWidth={1.5} />
         </RailButton>
         <div className="flex-1" />
+        <RailButton
+          // The icon is the destination, not the current state: a sun
+          // in the dark means "go light".
+          label={mode === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+          selected={false}
+          onClick={onToggleMode}
+        >
+          {mode === "dark" ? (
+            <Sun size={14} strokeWidth={1.5} />
+          ) : (
+            <Moon size={14} strokeWidth={1.5} />
+          )}
+        </RailButton>
         <RailButton
           label="Settings"
           selected={selection.kind === "settings"}
