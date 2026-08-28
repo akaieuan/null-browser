@@ -8,10 +8,10 @@ import {
   ChevronRight,
   ChevronUp,
   Columns2,
+  House,
   NotebookText,
   PanelLeft,
   PanelRight,
-  Plus,
   RotateCw,
   Star,
   X,
@@ -758,6 +758,15 @@ function App() {
    * the live page 240px sideways to make room for a 26px field, and the
    * hover-reveal lifecycle belongs to the pointer, not to a shortcut.
    */
+  /** The toolbar's home affordance: land on a blank Home tab, focusing
+      an existing empty one rather than stacking another. Distinct from
+      ⌘T's inline-search flow — this is "take me to the home surface",
+      not "start typing a new tab". */
+  const goHome = useCallback(() => {
+    if (pendingNewTabRef.current) cancelPendingNewTabRef.current();
+    openNewTabRef.current(BLANK_URL).catch(() => {});
+  }, []);
+
   const startNewTab = useCallback(() => {
     const resolved = resolveStartUrl(startPage);
     if (resolved) {
@@ -1756,11 +1765,11 @@ function App() {
             <Button
               variant="ghost"
               size="icon"
-              aria-label="New tab"
-              title="New tab · ⌘T"
-              onClick={startNewTab}
+              aria-label="Home"
+              title="Home"
+              onClick={goHome}
             >
-              <Plus strokeWidth={1.5} />
+              <House strokeWidth={1.5} />
             </Button>
           </div>
         </div>
