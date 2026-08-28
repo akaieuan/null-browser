@@ -462,12 +462,35 @@ static CORNER_RADIUS_PX: std::sync::atomic::AtomicU32 = std::sync::atomic::Atomi
 fn round_corners(webview: &tauri::Webview) {
     let radius = CORNER_RADIUS_PX.load(std::sync::atomic::Ordering::Relaxed) as f64;
     let _ = webview.with_webview(move |pw| unsafe {
-        use objc2::msg_send;
         use objc2::runtime::AnyObject;
+        use objc2::{class, msg_send};
         let view = pw.inner() as *mut AnyObject;
         let () = msg_send![&*view, setWantsLayer: true];
         let layer: *mut AnyObject = msg_send![&*view, layer];
         if !layer.is_null() {
+            // `masksToBounds` + a corner radius forces Core Animation to
+            // composite WebKit's hosted layer tree through an offscreen
+            // rounded-rect mask. That buffer is allocated at the layer's
+            // `contentsScale`, which defaults to 1.0 and — when the corners
+            // are rounded during tab creation, before the view has joined a
+            // Retina window — is never bumped to the backing scale. The
+            // result is a page rasterised at half resolution: fine on video
+            // and large UI, obviously soft on dense text (Google Docs). Pin
+            // the scale to the display so the masked buffer is Retina-sharp.
+            let window: *mut AnyObject = msg_send![&*view, window];
+            let scale: f64 = if !window.is_null() {
+                msg_send![&*window, backingScaleFactor]
+            } else {
+                let screen: *mut AnyObject = msg_send![class!(NSScreen), mainScreen];
+                if !screen.is_null() {
+                    msg_send![&*screen, backingScaleFactor]
+                } else {
+                    2.0
+                }
+            };
+            if scale > 0.0 {
+                let () = msg_send![&*layer, setContentsScale: scale];
+            }
             let () = msg_send![&*layer, setCornerRadius: radius];
             let () = msg_send![&*layer, setMasksToBounds: true];
         }
