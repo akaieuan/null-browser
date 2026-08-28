@@ -1,10 +1,17 @@
 //! Meta commands: app version, about, build info.
+//!
+//! Shell-only, like every command — see `crate::commands`.
 
-use tauri::{AppHandle, Manager, Theme};
+use tauri::{AppHandle, Manager, Theme, Webview};
+
+use crate::commands::{ensure_shell, is_shell_label};
 
 /// Returns the package version from `Cargo.toml` at compile time.
 #[tauri::command]
-pub fn get_app_version() -> &'static str {
+pub fn get_app_version(webview: Webview) -> &'static str {
+    if !is_shell_label(webview.label()) {
+        return "";
+    }
     env!("CARGO_PKG_VERSION")
 }
 
@@ -17,7 +24,13 @@ pub fn get_app_version() -> &'static str {
 /// AppKit's range. Chosen per appearance because several are
 /// inherently dark (HUD) or inherently bright (Popover).
 #[tauri::command]
-pub fn set_glass_material(app: AppHandle, appearance: String, level: String) -> Result<(), String> {
+pub fn set_glass_material(
+    webview: Webview,
+    app: AppHandle,
+    appearance: String,
+    level: String,
+) -> Result<(), String> {
+    ensure_shell(&webview)?;
     #[cfg(target_os = "macos")]
     {
         use window_vibrancy::{
@@ -59,7 +72,8 @@ pub fn set_glass_material(app: AppHandle, appearance: String, level: String) -> 
 /// the glass invisible; keeping the two in agreement is what lets a
 /// thin wash read as glass.
 #[tauri::command]
-pub fn set_window_theme(app: AppHandle, mode: String) -> Result<(), String> {
+pub fn set_window_theme(webview: Webview, app: AppHandle, mode: String) -> Result<(), String> {
+    ensure_shell(&webview)?;
     let theme = match mode.as_str() {
         "light" => Some(Theme::Light),
         "dark" => Some(Theme::Dark),

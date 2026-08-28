@@ -1,34 +1,45 @@
 //! Bookmark CRUD commands. Storage lives in SQLite.
 
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
-use tauri::{AppHandle, Runtime, State, WebviewWindow};
+use tauri::{AppHandle, Runtime, State, Webview, WebviewWindow};
 
+use crate::commands::{ensure_shell, ensure_shell_label};
 use crate::storage::{Bookmark, Storage};
 
 #[tauri::command]
-pub fn list_bookmarks(storage: State<Storage>) -> Result<Vec<Bookmark>, String> {
+pub fn list_bookmarks(webview: Webview, storage: State<Storage>) -> Result<Vec<Bookmark>, String> {
+    ensure_shell(&webview)?;
     storage.list_bookmarks().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub fn add_bookmark(
+    webview: Webview,
     storage: State<Storage>,
     url: String,
     title: String,
 ) -> Result<Bookmark, String> {
+    ensure_shell(&webview)?;
     storage
         .add_bookmark(&url, &title)
         .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn remove_bookmark(storage: State<Storage>, id: i64) -> Result<(), String> {
+pub fn remove_bookmark(webview: Webview, storage: State<Storage>, id: i64) -> Result<(), String> {
+    ensure_shell(&webview)?;
     storage.remove_bookmark(id).map_err(|e| e.to_string())
 }
 
 /// One pin dropped onto another: fold both into a new folder.
 #[tauri::command]
-pub fn group_bookmarks(storage: State<Storage>, target: i64, dragged: i64) -> Result<(), String> {
+pub fn group_bookmarks(
+    webview: Webview,
+    storage: State<Storage>,
+    target: i64,
+    dragged: i64,
+) -> Result<(), String> {
+    ensure_shell(&webview)?;
     storage
         .group_bookmarks(target, dragged)
         .map_err(|e| e.to_string())
@@ -42,24 +53,37 @@ pub fn create_folder(storage: State<Storage>) -> Result<Bookmark, String> {
 
 /// Move a pin into a folder, or back to the top level with `null`.
 #[tauri::command]
-pub fn move_bookmark(storage: State<Storage>, id: i64, parent: Option<i64>) -> Result<(), String> {
+pub fn move_bookmark(
+    webview: Webview,
+    storage: State<Storage>,
+    id: i64,
+    parent: Option<i64>,
+) -> Result<(), String> {
+    ensure_shell(&webview)?;
     storage.move_bookmark(id, parent).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub fn update_bookmark(
+    webview: Webview,
     storage: State<Storage>,
     id: i64,
     url: String,
     title: String,
 ) -> Result<(), String> {
+    ensure_shell(&webview)?;
     storage
         .update_bookmark(id, &url, &title)
         .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn reorder_bookmarks(storage: State<Storage>, ordered_ids: Vec<i64>) -> Result<(), String> {
+pub fn reorder_bookmarks(
+    webview: Webview,
+    storage: State<Storage>,
+    ordered_ids: Vec<i64>,
+) -> Result<(), String> {
+    ensure_shell(&webview)?;
     storage
         .reorder_bookmarks(&ordered_ids)
         .map_err(|e| e.to_string())
@@ -76,6 +100,7 @@ pub fn show_bookmark_menu<R: Runtime>(
     window: WebviewWindow<R>,
     id: i64,
 ) -> Result<(), String> {
+    ensure_shell_label(window.label())?;
     let open_new_tab = MenuItem::with_id(
         &app,
         format!("bmk:open_new_tab:{id}"),

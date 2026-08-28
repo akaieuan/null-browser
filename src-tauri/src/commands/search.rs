@@ -4,8 +4,9 @@
 //! leaves the device (invariant 4). Only the instance URL is logged —
 //! the query is the user's, not ours to keep.
 
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, State, Webview};
 
+use crate::commands::ensure_shell;
 use crate::network::record_search_outbound;
 use crate::search::{searxng_endpoint, searxng_search, SearchResult};
 use crate::storage::Storage;
@@ -13,12 +14,21 @@ use crate::storage::Storage;
 const INSTANCE_KEY: &str = "search_instance";
 
 #[tauri::command]
-pub fn search_get_instance(storage: State<Storage>) -> Result<Option<String>, String> {
+pub fn search_get_instance(
+    webview: Webview,
+    storage: State<Storage>,
+) -> Result<Option<String>, String> {
+    ensure_shell(&webview)?;
     storage.get_setting(INSTANCE_KEY).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn search_set_instance(storage: State<Storage>, url: String) -> Result<(), String> {
+pub fn search_set_instance(
+    webview: Webview,
+    storage: State<Storage>,
+    url: String,
+) -> Result<(), String> {
+    ensure_shell(&webview)?;
     let trimmed = url.trim();
     if trimmed.is_empty() {
         return Err("instance URL is empty".to_string());
@@ -34,7 +44,8 @@ pub fn search_set_instance(storage: State<Storage>, url: String) -> Result<(), S
 }
 
 #[tauri::command]
-pub fn search_clear_instance(storage: State<Storage>) -> Result<(), String> {
+pub fn search_clear_instance(webview: Webview, storage: State<Storage>) -> Result<(), String> {
+    ensure_shell(&webview)?;
     storage
         .delete_setting(INSTANCE_KEY)
         .map_err(|e| e.to_string())
@@ -42,10 +53,12 @@ pub fn search_clear_instance(storage: State<Storage>) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn search_web(
+    webview: Webview,
     app: AppHandle,
     storage: State<'_, Storage>,
     query: String,
 ) -> Result<Vec<SearchResult>, String> {
+    ensure_shell(&webview)?;
     let trimmed = query.trim();
     if trimmed.is_empty() {
         return Err("query is empty".to_string());

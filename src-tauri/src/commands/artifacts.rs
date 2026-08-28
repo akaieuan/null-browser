@@ -10,20 +10,23 @@
 //! What this transmits: nothing. What this remembers: the clip, until
 //! the user deletes it.
 
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, State, Webview};
 
+use crate::commands::{ensure_shell, is_shell_label};
 use crate::notes;
 use crate::storage::{Artifact, Storage};
 use crate::webview;
 use crate::webview::extract::{ExtractKind, ExtractRegistry};
 
 #[tauri::command]
-pub fn list_artifacts(storage: State<Storage>) -> Result<Vec<Artifact>, String> {
+pub fn list_artifacts(webview: Webview, storage: State<Storage>) -> Result<Vec<Artifact>, String> {
+    ensure_shell(&webview)?;
     storage.list_artifacts().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn get_artifact(storage: State<Storage>, id: i64) -> Result<Artifact, String> {
+pub fn get_artifact(webview: Webview, storage: State<Storage>, id: i64) -> Result<Artifact, String> {
+    ensure_shell(&webview)?;
     let artifact = storage.get_artifact(id).map_err(|e| e.to_string())?;
     // Opening is when external edits to the file mirror get adopted —
     // see notes::sync_from_disk for the contract.
@@ -31,7 +34,8 @@ pub fn get_artifact(storage: State<Storage>, id: i64) -> Result<Artifact, String
 }
 
 #[tauri::command]
-pub fn delete_artifact(storage: State<Storage>, id: i64) -> Result<(), String> {
+pub fn delete_artifact(webview: Webview, storage: State<Storage>, id: i64) -> Result<(), String> {
+    ensure_shell(&webview)?;
     // Captured before the row goes: delete_note needs the content Null
     // wrote so it can refuse to delete a file the user has since edited.
     let doomed = storage.get_artifact(id).ok();
@@ -49,7 +53,10 @@ pub fn delete_artifact(storage: State<Storage>, id: i64) -> Result<(), String> {
 
 /// The notes directory clips are mirrored to, for display in settings.
 #[tauri::command]
-pub fn get_notes_dir() -> Option<String> {
+pub fn get_notes_dir(webview: Webview) -> Option<String> {
+    if !is_shell_label(webview.label()) {
+        return None;
+    }
     notes::notes_dir().map(|p| p.to_string_lossy().into_owned())
 }
 
@@ -102,10 +109,12 @@ fn save_clip(
 /// empty for a standalone note.
 #[tauri::command]
 pub fn create_note(
+    webview: Webview,
     storage: State<Storage>,
     title: String,
     source_url: String,
 ) -> Result<Artifact, String> {
+    ensure_shell(&webview)?;
     let artifact = storage
         .insert_artifact("note", &title, &source_url, None, "", "none")
         .map_err(|e| e.to_string())?;
@@ -122,11 +131,13 @@ pub fn create_note(
 /// edited externally survives on disk.
 #[tauri::command]
 pub fn update_note(
+    webview: Webview,
     storage: State<Storage>,
     id: i64,
     title: String,
     markdown: String,
 ) -> Result<Artifact, String> {
+    ensure_shell(&webview)?;
     let old = storage.get_artifact(id).map_err(|e| e.to_string())?;
     storage
         .update_artifact(id, &title, &markdown)
@@ -149,11 +160,13 @@ pub fn update_note(
 
 #[tauri::command]
 pub async fn save_current_tab(
+    webview: Webview,
     app: AppHandle,
     storage: State<'_, Storage>,
     registry: State<'_, ExtractRegistry>,
     tab_id: String,
 ) -> Result<i64, String> {
+    ensure_shell(&webview)?;
     let payload =
         webview::extract::extract_tab(&app, &registry, &tab_id, ExtractKind::Article).await?;
     Ok(save_clip(&storage, "clip", &payload)?.id)
@@ -161,11 +174,13 @@ pub async fn save_current_tab(
 
 #[tauri::command]
 pub async fn clip_selection(
+    webview: Webview,
     app: AppHandle,
     storage: State<'_, Storage>,
     registry: State<'_, ExtractRegistry>,
     tab_id: String,
 ) -> Result<i64, String> {
+    ensure_shell(&webview)?;
     let payload =
         webview::extract::extract_tab(&app, &registry, &tab_id, ExtractKind::Selection).await?;
     Ok(save_clip(&storage, "selection", &payload)?.id)
