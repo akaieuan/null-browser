@@ -82,6 +82,14 @@ pub struct Artifact {
 /// is not `Sync` on its own.
 pub struct Storage {
     conn: Mutex<Connection>,
+    /// The folder made by "New Folder" that the user has not filled yet.
+    ///
+    /// An empty folder is swept the moment the pin grid is read, so an
+    /// abandoned one cannot linger — but the one just created has to
+    /// survive long enough to be filled, and it is empty by definition.
+    /// This is the single exemption, and it is in memory only: a restart
+    /// forgets it, so an empty folder never outlives the session.
+    pending_folder: Mutex<Option<i64>>,
 }
 
 impl Storage {
@@ -97,6 +105,7 @@ impl Storage {
         migrations::run(&mut conn).expect("run migrations");
         Self {
             conn: Mutex::new(conn),
+            pending_folder: Mutex::new(None),
         }
     }
 
@@ -107,6 +116,41 @@ impl Storage {
     }
 
     pub fn list_bookmarks(&self) -> rusqlite::Result<Vec<Bookmark>> {
+        // A folder with nothing in it is not a thing the user can use, so
+        // it does not survive being read. `move_bookmark` already
+        // dissolves the folder a pin leaves; this catches the rest — a
+        // folder abandoned empty, or one left over from an older build.
+        // The single exemption is the folder "New Folder" just made,
+        // which is empty precisely because it is waiting to be filled.
+        let exempt = self
+            .pending_folder
+            .lock()
+            .ok()
+            .and_then(|p| *p)
+            .unwrap_or(-1);
+        {
+            let conn = self.conn();
+            conn.execute(
+                "DELETE FROM bookmarks WHERE kind = 'folder' AND id <> ?1 \
+                 AND NOT EXISTS (SELECT 1 FROM bookmarks c WHERE c.parent_id = bookmarks.id)",
+                params![exempt],
+            )?;
+            // Once it has a pin in it the folder stands on its own, and
+            // the exemption must not outlive that — otherwise emptying it
+            // again would leave it stranded forever.
+            let filled: bool = conn
+                .query_row(
+                    "SELECT EXISTS (SELECT 1 FROM bookmarks WHERE parent_id = ?1)",
+                    params![exempt],
+                    |r| r.get(0),
+                )
+                .unwrap_or(false);
+            if filled {
+                if let Ok(mut pending) = self.pending_folder.lock() {
+                    *pending = None;
+                }
+            }
+        }
         let conn = self.conn();
         let mut stmt = conn.prepare(
             "SELECT id, url, title, created_at, kind, parent_id FROM bookmarks \
@@ -203,8 +247,15 @@ impl Storage {
                      (SELECT COALESCE(MAX(position) + 1, 0) FROM bookmarks), 'folder')",
             params![title, now],
         )?;
+        let id = conn.last_insert_rowid();
+        // Exempt it from the empty-folder sweep until something lands in
+        // it — otherwise the next list_bookmarks would delete the folder
+        // the user just asked for, before they could fill it.
+        if let Ok(mut pending) = self.pending_folder.lock() {
+            *pending = Some(id);
+        }
         Ok(Bookmark {
-            id: conn.last_insert_rowid(),
+            id,
             url: String::new(),
             title: title.to_string(),
             created_at: now,

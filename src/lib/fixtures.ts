@@ -99,6 +99,10 @@ function wantsEmpty(): boolean {
 
 let nextFixtureId = 100;
 
+/** Mirrors Storage::pending_folder — the just-made folder the empty-folder
+    sweep spares until something is dragged into it. */
+let pendingFolderId: number | null = null;
+
 /**
  * Commands with no useful fixture resolve to a sane empty value.
  *
@@ -126,7 +130,28 @@ export function fixtureFor(cmd: string, args?: Record<string, unknown>): unknown
     // A fresh array each call: the mutations below edit BOOKMARKS in
     // place, and handing React the same reference back would make
     // setState bail on identity and swallow the update.
-    case "list_bookmarks": return [...BOOKMARKS];
+    case "list_bookmarks": {
+      // Mirror storage::list_bookmarks: an empty folder does not survive
+      // being read, except the one New Folder just made and the user has
+      // not filled yet.
+      for (let i = BOOKMARKS.length - 1; i >= 0; i--) {
+        const b = BOOKMARKS[i];
+        if (
+          b.kind === "folder" &&
+          b.id !== pendingFolderId &&
+          !BOOKMARKS.some((c) => c.parent_id === b.id)
+        ) {
+          BOOKMARKS.splice(i, 1);
+        }
+      }
+      if (
+        pendingFolderId !== null &&
+        BOOKMARKS.some((c) => c.parent_id === pendingFolderId)
+      ) {
+        pendingFolderId = null;
+      }
+      return [...BOOKMARKS];
+    }
     case "move_bookmark": {
       const b = BOOKMARKS.find(
         (x) => x.id === args?.id && x.kind === "bookmark",
@@ -163,6 +188,7 @@ export function fixtureFor(cmd: string, args?: Record<string, unknown>): unknown
         created_at: now, kind: "folder", parent_id: null as number | null,
       };
       BOOKMARKS.push(folder);
+      pendingFolderId = folder.id;
       return folder;
     }
     case "group_bookmarks": {

@@ -11,18 +11,23 @@ import {
 import {
   closestCenter,
   DndContext,
+  MeasuringStrategy,
   PointerSensor,
+  pointerWithin,
   useDraggable,
   useSensor,
   useSensors,
+  type CollisionDetection,
   type DragEndEvent,
   type DragMoveEvent,
+  type DragOverEvent,
 } from "@dnd-kit/core";
 import {
   arrayMove,
   rectSortingStrategy,
   SortableContext,
   useSortable,
+  type SortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 
@@ -69,6 +74,35 @@ export type Selection =
  * Notes is deliberately absent: it is summoned next to a page from the
  * toolbar, not a place in the source list.
  */
+/**
+ * Pointer first, geometry second.
+ *
+ * `closestCenter` alone ranks droppables by distance from the *dragged
+ * tile's* centre, and that centre hangs wherever the tile was grabbed — so
+ * the folder under the pointer and the tile dnd-kit reported as `over`
+ * could be different tiles, and a pin dropped squarely on a folder was
+ * read as a drop on its neighbour. `pointerWithin` answers the question
+ * the gesture actually asks: what is under the pointer. `closestCenter`
+ * still covers the gaps between tiles, where the pointer is inside no
+ * droppable at all and the drag can only mean reorder.
+ */
+/**
+ * Hold every tile still.
+ *
+ * `rectSortingStrategy` slides the other tiles aside to open a gap while
+ * a pin is dragged — right for reordering, and the reason dropping a pin
+ * *into* a folder was so hard: the folder moved out from under the
+ * pointer exactly as it was aimed at. While the pointer is over a folder
+ * the grid switches to this, so the target stays where the user sees it.
+ */
+const freezeStrategy: SortingStrategy = () => null;
+
+const pinCollision: CollisionDetection = (args) => {
+  const underPointer = pointerWithin(args);
+  return underPointer.length > 0 ? underPointer : closestCenter(args);
+};
+
+
 export function Sidebar({
   width,
   tabs,
@@ -190,8 +224,34 @@ export function Sidebar({
     reportOver(!!at && at.left + at.width / 2 > width + 24);
   };
 
+  /** The folder the pointer is currently over, and would drop into.
+      Drives both the freeze and the tile's highlight, so "this is the
+      thing you are about to drop into" is visible before releasing. */
+  const [dropFolder, setDropFolder] = useState<number | null>(null);
+
+  /** Is `target` a folder this drag could actually land in? */
+  const folderTargetFor = (
+    activeId: string | number,
+    over: DragOverEvent["over"],
+  ): number | null => {
+    const target = over != null ? roots.find((b) => b.id === over.id) : undefined;
+    if (!target || target.kind !== "folder") return null;
+    const id = String(activeId);
+    if (id.startsWith("tab:")) return target.id;
+    const dragged = bookmarks.find((x) => x.id === activeId);
+    if (!dragged || dragged.kind !== "bookmark") return null;
+    // Already in it, or it is itself: nothing would move.
+    if (dragged.parent_id === target.id || dragged.id === target.id) return null;
+    return target.id;
+  };
+
+  const handleDragOver = (e: DragOverEvent) => {
+    setDropFolder(folderTargetFor(e.active.id, e.over));
+  };
+
   const handleDragEnd = (e: DragEndEvent) => {
     reportOver(false);
+    setDropFolder(null);
     const { active, over } = e;
 
     // Dropped past the sidebar's right edge = onto the page area. The
@@ -204,10 +264,26 @@ export function Sidebar({
     const target =
       over != null ? roots.find((b) => b.id === over.id) : undefined;
 
-    // Dead-centre on a tile means "into it"; the edges mean "beside
-    // it" (reorder). The iOS folder gesture, by geometry.
-    const cx = at ? at.left + at.width / 2 : 0;
-    const cy = at ? at.top + at.height / 2 : 0;
+    // Every "is it on that tile" test below uses the POINTER, not the
+    // dragged tile's centre. The tile hangs wherever it was grabbed, so
+    // its centre sits up to half a tile away from where the user is
+    // actually aiming — with 52px tiles and 6px gaps, an off-centre grab
+    // put that centre in a gap or over the neighbour, and dropping a pin
+    // squarely on a folder did nothing. `activatorEvent` is the opening
+    // pointerdown; plus the drag delta it is the pointer, now.
+    const act = e.activatorEvent as Partial<PointerEvent> | undefined;
+    const cx =
+      typeof act?.clientX === "number"
+        ? act.clientX + e.delta.x
+        : at
+          ? at.left + at.width / 2
+          : 0;
+    const cy =
+      typeof act?.clientY === "number"
+        ? act.clientY + e.delta.y
+        : at
+          ? at.top + at.height / 2
+          : 0;
 
     // Dead-centre on the target's middle half — the gesture that folds
     // two loose pins into a new folder.
@@ -371,16 +447,21 @@ export function Sidebar({
             is native and has no DOM to be a target. */}
         <DndContext
           sensors={sensors}
-          collisionDetection={closestCenter}
+          collisionDetection={pinCollision}
+          measuring={{ droppable: { strategy: MeasuringStrategy.Always } }}
           onDragMove={handleDragMove}
+          onDragOver={handleDragOver}
           onDragEnd={handleDragEnd}
-          onDragCancel={() => reportOver(false)}
+          onDragCancel={() => {
+            reportOver(false);
+            setDropFolder(null);
+          }}
         >
           {roots.length > 0 && (
             <>
               <SortableContext
                 items={roots.map((b) => b.id)}
-                strategy={rectSortingStrategy}
+                strategy={dropFolder !== null ? freezeStrategy : rectSortingStrategy}
               >
                 {/* aria-label, not aria-labelledby: the heading that used
                     to name this group is gone, and icon-only tiles have
@@ -388,7 +469,7 @@ export function Sidebar({
                 <ul
                   role="list"
                   aria-label="Saved sites"
-                  className="grid shrink-0 grid-cols-4 gap-1.5 pt-1"
+                  className="grid shrink-0 grid-cols-4 gap-2 pt-1"
                   onContextMenu={(e) => {
                     // Only the grid's own empty space (gaps, padding). A
                     // tile handles its own right-click and bubbles here, so
@@ -402,6 +483,7 @@ export function Sidebar({
                         <SortableTile
                           bookmark={b}
                           selected={openFolder === b.id}
+                          dropTarget={dropFolder === b.id}
                           expanded={openFolder === b.id}
                           onClick={() =>
                             setOpenFolder((cur) => (cur === b.id ? null : b.id))
@@ -431,7 +513,7 @@ export function Sidebar({
                           <SiteIcon
                             url={b.url}
                             icon={iconFor(b.url)}
-                            size={18}
+                            size={24}
                             className="rounded"
                           />
                         </SortableTile>
@@ -456,7 +538,7 @@ export function Sidebar({
                   // The tray spills out of the grid it belongs to, so it
                   // arrives on the same drop as everything else summoned
                   // from above it.
-                  className="mt-1.5 grid shrink-0 grid-cols-4 gap-1.5 rounded-lg bg-card p-1.5 motion-safe:animate-[np-drop_160ms_ease-out]"
+                  className="mt-1.5 grid shrink-0 grid-cols-4 gap-2 rounded-lg bg-card p-2 motion-safe:animate-[np-drop_160ms_ease-out]"
                 >
                   {open.map((b) => (
                     <li key={b.id}>
@@ -466,7 +548,7 @@ export function Sidebar({
                           <SiteIcon
                             url={b.url}
                             icon={iconFor(b.url)}
-                            size={16}
+                            size={22}
                             className="rounded"
                           />
                         }
@@ -733,7 +815,7 @@ function DraggableFolderPin({
         onClick={onClick}
         onAuxClick={onAuxClick}
         onContextMenu={onContextMenu}
-        className="flex aspect-square w-full items-center justify-center rounded-lg bg-muted transition-[background-color,transform] duration-150 ease-out hover:bg-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring motion-safe:hover:-translate-y-px"
+        className="flex aspect-square w-full items-center justify-center rounded-lg border border-border bg-tile tile-glass transition-transform duration-150 ease-out focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring motion-safe:hover:-translate-y-px"
         {...attributes}
         {...listeners}
       >
@@ -746,6 +828,7 @@ function DraggableFolderPin({
 function SortableTile({
   bookmark,
   selected = false,
+  dropTarget = false,
   expanded,
   onClick,
   onAuxClick,
@@ -755,6 +838,8 @@ function SortableTile({
   bookmark: Bookmark;
   /** Folder tiles mark their open state; pins never set this. */
   selected?: boolean;
+  /** A pin is being held over this folder and would drop into it. */
+  dropTarget?: boolean;
   /** Set on folder tiles — a folder is a disclosure control that opens
       the pin tray. Left undefined on pins, which are not. */
   expanded?: boolean;
@@ -795,16 +880,25 @@ function SortableTile({
         // note cards give: space moves, brightness is left alone. An
         // open folder takes the accent ring to mark it active.
         className={cn(
-          "flex aspect-square w-full items-center justify-center rounded-xl bg-accent transition-transform duration-150 ease-out",
+          "flex aspect-square w-full items-center justify-center rounded-xl bg-tile transition-transform duration-150 ease-out",
+          // The glass: a top-lit sheen over the tile fill, so the chip
+          // reads as a lens catching light rather than a flat swatch.
+          "tile-glass",
           // A control edge as well as a fill: tone alone is weak in
           // light mode, where the accent tile sits only a step off a
           // near-white sidebar. The border gives the tile a findable
           // outline in both modes and keeps it defined over the glass.
           "border border-border",
           "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
-          selected
-            ? "ring-1 ring-select"
-            : "motion-safe:hover:-translate-y-px",
+          // A drop target wins over the open-folder ring: it is the more
+          // urgent state, and it says "release here". The scale is the
+          // signal — motion moves space, so the tile grows rather than
+          // glowing brighter.
+          dropTarget
+            ? "ring-2 ring-select motion-safe:scale-110"
+            : selected
+              ? "ring-1 ring-select"
+              : "motion-safe:hover:-translate-y-px",
         )}
         {...attributes}
         {...listeners}
@@ -836,13 +930,13 @@ function FolderGlyph({
             key={b.id}
             url={b.url}
             icon={iconFor(b.url)}
-            size={11}
-            className="rounded-[2px]"
+            size={14}
+            className="rounded-[3px]"
           />
         ) : (
           <span
             key={`empty-${i}`}
-            className="h-[11px] w-[11px] rounded-[2px] bg-muted-foreground/15"
+            className="h-[14px] w-[14px] rounded-[3px] bg-muted-foreground/15"
           />
         );
       })}

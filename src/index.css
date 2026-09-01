@@ -17,6 +17,7 @@
   --color-border: var(--border);
   --color-seam: var(--seam);
   --color-chrome: var(--chrome);
+  --color-tile: var(--tile);
   --color-card: var(--card);
   --color-input: var(--input);
   --color-ring: var(--ring);
@@ -88,6 +89,17 @@
   --muted-foreground: oklch(0.712 0.008 264);
   --accent: oklch(0.275 0.007 264);
   --accent-foreground: oklch(0.97 0.003 264);
+  /* Pin tiles sit a clear step above --accent. A site icon is artwork
+     the app does not control: dark logos (a black mark on transparent)
+     disappeared into a 0.275 tile, which is what made the pin grid read
+     as empty boxes. This is the backing that has to make *someone
+     else's* icon legible, so it is brighter than the surface ladder
+     would otherwise go. */
+  /* 0.48, not the 0.275 the surface ladder would suggest: at that value a
+     black favicon scored 1.9:1 against its own tile and read as an empty
+     box. This clears 3:1 — WCAG's floor for a graphical object — so third
+     party artwork the app cannot restyle stays legible. */
+  --tile-solid: oklch(0.48 0.009 264);
   --border: oklch(1 0 0 / 30%);
   --input: oklch(0.205 0.005 264);
   --ring: oklch(0.72 0.15 158);
@@ -110,6 +122,10 @@
   /* Pins/raised surfaces deepen to match, holding the ladder gap. */
   --accent: oklch(0.846 0.011 264);
   --accent-foreground: oklch(0.19 0.006 264);
+  /* In light the tile goes the other way — above the chrome, not below
+     — so a pin is a white chip on the grey sidebar. Colour icons carry
+     on white, which is the ground every app icon is drawn against. */
+  --tile-solid: oklch(0.995 0.001 264);
   --border: oklch(0.19 0.006 264 / 46%);
   --input: oklch(0.928 0.005 264);
   /* Deepened a touch (0.528 → 0.515) to hold ~4.5:1 on the now-darker
@@ -161,6 +177,7 @@
 :root {
   --chrome: var(--muted);
   --card: var(--background);
+  --tile: var(--tile-solid);
 }
 
 :root[data-vibrancy] {
@@ -174,6 +191,11 @@
      the glass is actually *seen*, because they are the largest
      surfaces. */
   --card: color-mix(in oklab, var(--background) 70%, transparent);
+  /* The tile keeps far more of itself than the chrome does. It is a
+     78%-opaque chip, not a wash: the glass is meant to be *behind* the
+     pins, and a tile thin enough to show the desktop through it is the
+     one that stopped holding its icon. */
+  --tile: color-mix(in oklab, var(--tile-solid) 78%, transparent);
 }
 
 :root[data-vibrancy] body {
@@ -189,6 +211,7 @@
 :root[data-vibrancy][data-mode="light"] {
   --chrome: color-mix(in oklab, var(--muted) 46%, transparent);
   --card: color-mix(in oklab, var(--background) 82%, transparent);
+  --tile: color-mix(in oklab, var(--tile-solid) 86%, transparent);
 }
 
 /* Glass strength, set from Settings. `clear` is the Zen look — mostly
@@ -196,15 +219,32 @@
 :root[data-vibrancy][data-glass="clear"] {
   --chrome: color-mix(in oklab, var(--muted) 10%, transparent);
   --card: color-mix(in oklab, var(--background) 45%, transparent);
+  /* Even at the clearest setting the tile stays mostly itself — the
+     wallpaper is welcome behind the pins, not through them. */
+  --tile: color-mix(in oklab, var(--tile-solid) 66%, transparent);
 }
 
 :root[data-vibrancy][data-glass="solid"] {
   --chrome: var(--muted);
   --card: var(--background);
+  --tile: var(--tile-solid);
 }
 
 :root[data-vibrancy][data-glass="solid"] body {
   background: var(--muted);
+}
+
+/* The pin chip's glass: a top-lit sheen laid over `--tile`.
+   Its own class, not a `bg-gradient-*` utility, because `cn` runs
+   tailwind-merge, which files every `bg-*` in one group and silently
+   dropped the tile's colour when a gradient class joined it — the chip
+   rendered with no fill at all. */
+.tile-glass {
+  background-image: linear-gradient(
+    to bottom,
+    rgb(255 255 255 / 0.1),
+    transparent 65%
+  );
 }
 
 html,
