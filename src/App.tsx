@@ -763,7 +763,13 @@ function App() {
       ]);
       setActiveId(id);
       setInput(hasWebview ? resolved : "");
-      inputRef.current?.focus();
+      // Only a blank tab wants the URL bar: there is nothing to read, so
+      // the cursor belongs in the field. A tab opened on a real page —
+      // a link from another page, a bookmark in a new tab — is the page
+      // the user asked to look at, and taking the caret to the URL bar
+      // there means the first keystroke edits the address instead of
+      // reaching the page, and the page never gets keyboard focus.
+      if (!hasWebview) inputRef.current?.focus();
     },
     [startPage, rectNow, openTabAt],
   );

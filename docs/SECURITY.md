@@ -106,10 +106,20 @@ markdown is rendered through react-markdown with raw HTML disabled.
 
 `null-event://` is a one-way channel from tab to Rust, carried on image
 GETs rather than `fetch` because `img-src` survives more sites' CSPs than
-`connect-src` does. Nothing travels back down it, and it grants a page no
-capability it did not already have. It has two routes:
+`connect-src` does. Nothing travels back down it. Its routes:
 
 - `null-event://log` — the subresource observer. Observation only.
+- `null-event://open` — a `target="_blank"` click, forwarded by the
+  injected interceptor because WebKit consults no delegate for an
+  anchor's new-frame navigation in this embedding (verified against
+  wry 0.54: neither the navigation policy nor `createWebView` fires;
+  the click dies inside WebKit). The shell opens the URL as a focused
+  tab. This is the one route that grants an *action*, so it is fenced:
+  the URL is re-parsed and must be http/https, and openings are
+  rate-limited (300ms) so page script that calls the beacon directly —
+  it is reachable without a user gesture — cannot fire-hose tabs open.
+  The worst a hostile page gets is what `window.open` on a user click
+  already gave it: one ordinary, visible, closable tab.
 - `null-event://favicon` — the favicon channel (the "second caller"
   this section warned about; reviewed 2026-08-26). One un-chunked
   beacon per page load carrying `u` (origin) and `d` (icon). The

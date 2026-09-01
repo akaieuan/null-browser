@@ -1,4 +1,4 @@
-use tauri::{http, Manager, Url};
+use tauri::{http, Emitter, Manager, Url};
 
 pub mod blocklist;
 pub mod commands;
@@ -74,6 +74,41 @@ pub fn run() {
                                     );
                                 }
                             }
+                        }
+                    }
+                    Some("open") => {
+                        // A target="_blank" click, forwarded by the tab's
+                        // injected interceptor (see OBSERVER_SCRIPT) because
+                        // WebKit consults no delegate for an anchor's
+                        // new-frame navigation in this embedding. Validated
+                        // to web schemes and rate-limited: the beacon is
+                        // reachable by page script, and without the limit a
+                        // hostile page could fire-hose tabs open.
+                        static LAST_OPEN_MS: std::sync::atomic::AtomicU64 =
+                            std::sync::atomic::AtomicU64::new(0);
+                        for (k, v) in parsed.query_pairs() {
+                            if k != "u" {
+                                continue;
+                            }
+                            let Ok(dest) = Url::parse(&v) else { continue };
+                            if !matches!(dest.scheme(), "http" | "https") {
+                                continue;
+                            }
+                            let now = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map(|d| d.as_millis() as u64)
+                                .unwrap_or(0);
+                            let last =
+                                LAST_OPEN_MS.load(std::sync::atomic::Ordering::Relaxed);
+                            if now.saturating_sub(last) < 300 {
+                                continue;
+                            }
+                            LAST_OPEN_MS.store(now, std::sync::atomic::Ordering::Relaxed);
+                            let _ = ctx.app_handle().emit_to(
+                                tauri::EventTarget::webview("main"),
+                                "open-url",
+                                dest.to_string(),
+                            );
                         }
                     }
                     Some("jserr") => {

@@ -82,6 +82,30 @@ const OBSERVER_SCRIPT: &str = r#"
       img.src = 'null-event://log?d=' + encodeURIComponent(JSON.stringify(data));
     } catch (e) {}
   }
+  // target="_blank" links, routed by hand. In this embedding WebKit
+  // consults no delegate at all for an anchor's new-frame navigation —
+  // not the navigation policy, not createWebView (verified with a
+  // harness; gesture-independent) — so the click dies silently inside
+  // WebKit. Intercept it at the source and hand the URL to the shell,
+  // which opens it as a focused tab. window.open() is untouched: it
+  // still reaches the native new-window delegate.
+  document.addEventListener('click', function (e) {
+    try {
+      if (e.defaultPrevented || e.button !== 0) return;
+      var n = e.target;
+      while (n && n !== document && (n.tagName || '').toUpperCase() !== 'A') {
+        n = n.parentNode;
+      }
+      if (!n || n === document) return;
+      if ((n.getAttribute('target') || '') !== '_blank') return;
+      var href = n.href || '';
+      if (!/^https?:/i.test(href)) return;
+      e.preventDefault();
+      var img = new Image();
+      img.src = 'null-event://open?u=' + encodeURIComponent(href);
+    } catch (err) {}
+  }, true);
+
   try {
     var obs = new PerformanceObserver(function(list) {
       var entries = list.getEntries();
@@ -178,6 +202,12 @@ fn s<E: std::fmt::Display>(e: E) -> String {
 /// Popup window labels: popup-0, popup-1, … The prefix is what the
 /// navigation guard and the capability system key on — popups carry
 /// arbitrary web content and must stay as unprivileged as tabs.
+/// The largest window a page may still open as a real popup. Anything
+/// bigger is a page in disguise and becomes a tab instead. Sized to the
+/// classic auth/share popup, which sits well under this.
+const POPUP_MAX_W: f64 = 640.0;
+const POPUP_MAX_H: f64 = 720.0;
+
 static POPUP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// A filename a page suggested is untrusted input for a filesystem
@@ -347,7 +377,23 @@ pub fn create_tab(
         if !matches!(url.scheme(), "http" | "https") {
             return NewWindowResponse::Deny;
         }
-        if features.size().is_none() {
+        // What the page opens becomes a *tab*, which is what a link
+        // opening in a browser is expected to do. The exception is a
+        // request shaped like a sign-in or share popup: small, and with
+        // both dimensions named. Those have to stay real windows —
+        // WebKit hands the opener a live `window` object, and an OAuth
+        // flow finishes by calling back through `window.opener`. A tab
+        // is a separate webview with no such handle, so routing those to
+        // tabs would leave "Continue with Google" hanging on a page that
+        // can never report its result.
+        //
+        // `size` is `Some` only when the script named both a width and a
+        // height (wry maps WKWindowFeatures straight through), so a bare
+        // `target="_blank"` never reaches the popup branch.
+        let popup_shaped = features
+            .size()
+            .is_some_and(|s| s.width <= POPUP_MAX_W && s.height <= POPUP_MAX_H);
+        if !popup_shaped {
             let _ = popup_app.emit_to(EventTarget::webview("main"), "open-url", url.to_string());
             return NewWindowResponse::Deny;
         }
